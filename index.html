@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0E1116">
+<title>持倉損益</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500&family=Noto+Serif+TC:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0E1116; --ink2:#151A21; --ink3:#1C222B;
+    --rule:#262E39; --rule-soft:#1E252E;
+    --ivory:#E9E4D8; --dim:#868D97; --dimmer:#5C636D;
+    --amber:#C9A227; --amber-hi:#F0C544;
+    --up:#E2453B; --up-hi:#FF6E60;
+    --down:#2FBF71; --down-hi:#56E39B;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --sans:'Noto Sans TC',system-ui,sans-serif;
+    --serif:'Noto Serif TC',serif;
+    --pad:clamp(14px,3vw,28px);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--ink); color:var(--ivory);
+    font-family:var(--sans); font-size:15px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 var(--pad) 64px}
+
+  /* ---------- 通用 ---------- */
+  .eyebrow{
+    font-family:var(--mono); font-size:10.5px; font-weight:500;
+    letter-spacing:.18em; text-transform:uppercase; color:var(--amber);
+  }
+  .num{font-family:var(--mono); font-variant-numeric:tabular-nums; font-feature-settings:"tnum"}
+  h2{font-family:var(--serif); font-weight:700; font-size:19px; margin:0; letter-spacing:.02em}
+  .up{color:var(--up-hi)} .down{color:var(--down-hi)} .flat{color:var(--dim)}
+  button{font-family:var(--sans); cursor:pointer}
+  :focus-visible{outline:2px solid var(--amber-hi); outline-offset:2px}
+
+  .btn{
+    background:transparent; border:1px solid var(--rule); color:var(--ivory);
+    border-radius:2px; padding:7px 13px; font-size:13px;
+    transition:border-color .15s, background .15s;
+  }
+  .btn:hover{border-color:var(--amber); background:#ffffff08}
+  .btn.solid{background:var(--amber); border-color:var(--amber); color:#141008; font-weight:500}
+  .btn.solid:hover{background:var(--amber-hi); border-color:var(--amber-hi)}
+  .btn.ghost{border-color:transparent; color:var(--dim); padding:7px 9px}
+  .btn.ghost:hover{color:var(--ivory)}
+  .btn.on{color:var(--amber-hi); border-color:var(--rule)}
+
+  /* ---------- 頂列 ---------- */
+  .topbar{
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:18px 0 16px; border-bottom:1px solid var(--rule-soft);
+  }
+  .brand{font-family:var(--serif); font-weight:700; font-size:15px; letter-spacing:.06em}
+  .status{display:flex; align-items:center; gap:7px; font-family:var(--mono); font-size:11.5px; color:var(--dim)}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--dimmer);flex:none}
+  .dot.live{background:var(--down-hi); box-shadow:0 0 0 3px #2fbf7122}
+  .dot.warn{background:var(--amber-hi); box-shadow:0 0 0 3px #c9a22722}
+  .dot.err{background:var(--up-hi); box-shadow:0 0 0 3px #e2453b22}
+  .topbar .spacer{flex:1}
+
+  /* ---------- 主數字 ---------- */
+  .hero{padding:34px 0 0}
+  .hero-figure{display:flex; align-items:flex-end; gap:clamp(16px,4vw,44px); flex-wrap:wrap}
+  .pnl{
+    font-family:var(--mono); font-weight:600;
+    font-size:clamp(38px,9vw,76px); line-height:.92; letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums;
+  }
+  .pnl .cur{font-size:.42em; font-weight:400; color:var(--dim); margin-right:.25em; letter-spacing:.04em}
+  .ret{padding-bottom:6px}
+  .ret .v{font-family:var(--mono); font-size:clamp(17px,3.4vw,25px); font-weight:500}
+  .ret .k{font-size:11px; color:var(--dim); font-family:var(--mono); letter-spacing:.1em}
+
+  /* ---------- 損益帶（signature） ---------- */
+  .band-wrap{margin-top:26px; position:relative}
+  .band{
+    display:flex; height:52px; width:100%; border-radius:2px; overflow:hidden;
+    background:var(--ink3); border:1px solid var(--rule-soft);
+  }
+  .band-seg{
+    position:relative; min-width:2px; display:flex; align-items:center; justify-content:center;
+    border-right:1px solid #0e111680; transition:filter .15s;
+  }
+  .band-seg:last-child{border-right:0}
+  .band-seg:hover{filter:brightness(1.28)}
+  .band-seg span{
+    font-family:var(--mono); font-size:10.5px; font-weight:600; letter-spacing:.04em;
+    color:#0d1015; opacity:.82; white-space:nowrap; pointer-events:none;
+  }
+  .sweep{
+    position:absolute; inset:1px auto 1px 0; width:1px; background:var(--amber-hi);
+    box-shadow:0 0 10px 1px #f0c54488; pointer-events:none; opacity:.55;
+    animation:sweep var(--cycle,60s) linear infinite;
+  }
+  @keyframes sweep{from{left:0} to{left:100%}}
+  .band-legend{
+    display:flex; justify-content:space-between; gap:12px; margin-top:9px;
+    font-family:var(--mono); font-size:11px; color:var(--dim); min-height:17px;
+  }
+  .band-legend b{color:var(--ivory); font-weight:500}
+
+  /* ---------- 統計列 ---------- */
+  .stats{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    border-top:1px solid var(--rule-soft); margin-top:34px;
+  }
+  .stat{padding:16px 18px 16px 0}
+  .stat .k{font-family:var(--mono); font-size:10.5px; letter-spacing:.13em; color:var(--dim); text-transform:uppercase}
+  .stat .v{font-family:var(--mono); font-size:19px; font-weight:500; margin-top:5px; font-variant-numeric:tabular-nums}
+  .stat .s{font-size:11.5px; color:var(--dimmer); font-family:var(--mono); margin-top:2px}
+
+  /* ---------- 表格 ---------- */
+  .book{margin-top:42px}
+  .book-head{display:flex; align-items:baseline; gap:12px; margin-bottom:12px}
+  .book-head .eyebrow{margin-left:auto}
+  .tscroll{overflow-x:auto; margin:0 calc(var(--pad) * -1); padding:0 var(--pad)}
+  table{width:100%; border-collapse:collapse; min-width:640px}
+  th{
+    font-family:var(--mono); font-size:10.5px; font-weight:500; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--dim); text-align:right;
+    padding:9px 10px; border-bottom:1px solid var(--rule); white-space:nowrap;
+  }
+  th:first-child,td:first-child{text-align:left; padding-left:0}
+  th:last-child,td:last-child{padding-right:0}
+  td{
+    padding:11px 10px; text-align:right; border-bottom:1px solid var(--rule-soft);
+    font-family:var(--mono); font-size:13.5px; font-variant-numeric:tabular-nums;
+    white-space:nowrap;
+  }
+  tbody tr:hover td{background:#ffffff05}
+  .code{font-weight:600; letter-spacing:.03em}
+  .cname{font-family:var(--sans); font-size:11.5px; color:var(--dim); margin-left:8px; letter-spacing:0}
+  tfoot td{border-bottom:0; border-top:1px solid var(--rule); font-weight:600; color:var(--ivory); padding-top:13px}
+  tfoot td:first-child{font-family:var(--serif)}
+  .chip{
+    display:inline-block; font-size:9.5px; padding:1px 5px; border:1px solid var(--rule);
+    border-radius:2px; color:var(--dim); margin-left:8px; letter-spacing:.08em;
+  }
+
+  /* ---------- 走勢 ---------- */
+  .trend{margin-top:44px}
+  .trend svg{width:100%; height:120px; display:block; margin-top:10px; overflow:visible}
+  .trend .axis{font-family:var(--mono); font-size:10px; fill:var(--dimmer)}
+
+  /* ---------- 空狀態 ---------- */
+  .empty{
+    border:1px dashed var(--rule); border-radius:3px; padding:34px 26px;
+    margin-top:30px; text-align:center;
+  }
+  .empty p{color:var(--dim); margin:0 0 18px; font-size:14px}
+  .empty .row{display:flex; gap:10px; justify-content:center; flex-wrap:wrap}
+
+  /* ---------- 錯誤條 ---------- */
+  .errbar{
+    margin-top:20px; border-left:2px solid var(--amber); background:#c9a2270d;
+    padding:11px 14px; font-size:12.5px; color:var(--ivory);
+  }
+  .errbar b{font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; color:var(--amber); display:block; margin-bottom:3px}
+
+  footer{
+    margin-top:56px; padding-top:18px; border-top:1px solid var(--rule-soft);
+    font-size:11.5px; color:var(--dimmer); line-height:1.7;
+  }
+
+  /* ---------- 設定面板 ---------- */
+  .scrim{position:fixed; inset:0; background:#06080bcc; opacity:0; pointer-events:none; transition:opacity .2s; z-index:40}
+  .scrim.open{opacity:1; pointer-events:auto}
+  .panel{
+    position:fixed; top:0; right:0; bottom:0; width:min(560px,100%);
+    background:var(--ink2); border-left:1px solid var(--rule);
+    transform:translateX(100%); transition:transform .24s cubic-bezier(.4,0,.2,1);
+    z-index:50; display:flex; flex-direction:column;
+  }
+  .panel.open{transform:none}
+  .panel-head{display:flex; align-items:center; padding:18px 20px; border-bottom:1px solid var(--rule); gap:12px}
+  .panel-head h2{flex:1}
+  .panel-body{overflow-y:auto; padding:20px; flex:1}
+  .panel-foot{display:flex; gap:10px; padding:16px 20px; border-top:1px solid var(--rule); flex-wrap:wrap}
+  .field{margin-bottom:20px}
+  .field label{display:block; font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:6px}
+  .field .hint{font-size:11.5px; color:var(--dimmer); margin-top:5px; line-height:1.6}
+  input,select{
+    width:100%; background:var(--ink); border:1px solid var(--rule); color:var(--ivory);
+    padding:8px 10px; border-radius:2px; font-family:var(--mono); font-size:13px;
+  }
+  input:focus,select:focus{border-color:var(--amber); outline:none}
+  .hgrid{display:grid; grid-template-columns:88px 1fr 1fr 1fr 30px; gap:7px; align-items:center; margin-bottom:7px}
+  .hgrid.head{font-family:var(--mono); font-size:10px; letter-spacing:.1em; color:var(--dim); text-transform:uppercase; margin-bottom:8px}
+  .hgrid input,.hgrid select{padding:6px 7px; font-size:12.5px}
+  .del{background:none;border:0;color:var(--dimmer);font-size:17px;line-height:1;padding:4px}
+  .del:hover{color:var(--up-hi)}
+  .seg{display:flex; border:1px solid var(--rule); border-radius:2px; overflow:hidden}
+  .seg button{flex:1; background:transparent; border:0; color:var(--dim); padding:8px; font-size:12.5px}
+  .seg button[aria-pressed="true"]{background:var(--ink3); color:var(--ivory)}
+
+  @media (max-width:620px){
+    th.hide,td.hide{display:none}
+    .hgrid{grid-template-columns:74px 1fr 1fr 1fr 26px; gap:5px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none !important; transition:none !important}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">持倉損益</div>
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText">尚未連線</span></div>
+    <div class="spacer"></div>
+    <button class="btn ghost" id="soundBtn" title="音效">♪ 靜音</button>
+    <button class="btn" id="refreshBtn">重新整理</button>
+    <button class="btn" id="settingsBtn">設定</button>
+  </div>
+
+  <div id="errbox"></div>
+
+  <section class="hero" id="hero">
+    <div class="eyebrow">未實現損益 · 新台幣</div>
+    <div class="hero-figure">
+      <div class="pnl flat" id="pnl"><span class="cur">NT$</span>—</div>
+      <div class="ret">
+        <div class="k">報酬率</div>
+        <div class="v flat" id="ret">—</div>
+      </div>
+    </div>
+
+    <div class="band-wrap">
+      <div class="band" id="band"></div>
+      <div class="sweep" id="sweep"></div>
+      <div class="band-legend">
+        <span id="bandInfo">每個色塊寬度是該檔佔總市值的比重，顏色深淺是它自己的報酬率</span>
+        <span id="bandCount"></span>
+      </div>
+    </div>
+  </section>
+
+  <div class="stats" id="stats"></div>
+
+  <div id="books"></div>
+
+  <section class="trend" id="trend" hidden>
+    <div class="book-head"><h2>總市值走勢</h2><span class="eyebrow" id="trendRange"></span></div>
+    <svg id="spark" viewBox="0 0 800 120" preserveAspectRatio="none" aria-hidden="true"></svg>
+  </section>
+
+  <footer>
+    損益以現價 × 股數 − 均價 × 股數計算，未扣手續費與交易稅，股利也不計入。<br>
+    美股成本以目前匯率換算新台幣，與你實際買入當天的匯率會有落差。<br>
+    台股報價來自證交所，美股與匯率來自 Yahoo Finance。持倉資料只存在這台瀏覽器裡。
+  </footer>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="panel" id="panel" aria-hidden="true">
+  <div class="panel-head">
+    <h2>設定</h2>
+    <button class="btn ghost" id="closePanel" aria-label="關閉">✕</button>
+  </div>
+  <div class="panel-body">
+    <div class="field">
+      <label for="workerUrl">報價來源網址</label>
+      <input id="workerUrl" placeholder="https://xxx.workers.dev" autocomplete="off" spellcheck="false">
+      <div class="hint">你自己部署的 Cloudflare Worker 網址。沒有這個就抓不到報價。</div>
+    </div>
+
+    <div class="field">
+      <label>漲跌顏色</label>
+      <div class="seg" id="colorSeg">
+        <button data-v="tw" aria-pressed="true">紅漲綠跌（台股）</button>
+        <button data-v="us" aria-pressed="false">綠漲紅跌（美股）</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="interval">自動更新間隔</label>
+      <select id="interval">
+        <option value="0">不自動更新</option>
+        <option value="15">15 秒</option>
+        <option value="30">30 秒</option>
+        <option value="60" selected>60 秒</option>
+        <option value="300">5 分鐘</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>持倉</label>
+      <div class="hgrid head">
+        <span>市場</span><span>代號</span><span>股數</span><span>均價</span><span></span>
+      </div>
+      <div id="hrows"></div>
+      <button class="btn" id="addRow" style="margin-top:8px">新增一列</button>
+      <div class="hint">台股均價填新台幣，美股均價填美元。上櫃股票要選「上櫃」，選錯會查不到價。</div>
+    </div>
+
+    <div class="field">
+      <label>備份</label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn" id="exportBtn">匯出 JSON</button>
+        <button class="btn" id="importBtn">匯入 JSON</button>
+        <button class="btn" id="clearBtn">清除全部</button>
+      </div>
+      <div class="hint">清瀏覽器資料或換電腦就會消失，記得偶爾匯出一份。</div>
+      <input type="file" id="fileIn" accept=".json,application/json" hidden>
+    </div>
+  </div>
+  <div class="panel-foot">
+    <button class="btn solid" id="saveBtn">儲存並更新</button>
+    <button class="btn" id="sampleBtn">載入範例持倉</button>
+  </div>
+</aside>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------- 儲存層（localStorage 不可用時退回記憶體） ---------- */
+const mem = {};
+const store = {
+  get(k, d) {
+    try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); }
+    catch { return k in mem ? mem[k] : d; }
+  },
+  set(k, v) {
+    try { localStorage.setItem(k, JSON.stringify(v)); }
+    catch { mem[k] = v; }
+  },
+  del(k) { try { localStorage.removeItem(k); } catch { delete mem[k]; } }
+};
+
+const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
+
+let holdings = store.get(K.hold, []);
+let cfg = Object.assign({ url:'', colors:'tw', interval:60, sound:false }, store.get(K.cfg, {}));
+let history = store.get(K.hist, []);
+let quotes = null, timer = null, lastTotal = null;
+
+const $ = s => document.querySelector(s);
+const el = (t, c) => { const e = document.createElement(t); if (c) e.className = c; return e; };
+
+/* ---------- 格式 ---------- */
+const nf0 = new Intl.NumberFormat('zh-TW', { maximumFractionDigits:0 });
+const nf2 = new Intl.NumberFormat('zh-TW', { minimumFractionDigits:2, maximumFractionDigits:2 });
+const twd = n => (n < 0 ? '−' : '') + nf0.format(Math.abs(Math.round(n)));
+const sgn = n => (n > 0 ? '+' : n < 0 ? '−' : '') + nf0.format(Math.abs(Math.round(n)));
+const pct = n => (n > 0 ? '+' : n < 0 ? '−' : '') + nf2.format(Math.abs(n)) + '%';
+
+/* 依設定決定漲=紅或漲=綠 */
+function dirClass(n) {
+  if (!Number.isFinite(n) || Math.abs(n) < 1e-9) return 'flat';
+  const rise = n > 0;
+  if (cfg.colors === 'tw') return rise ? 'up' : 'down';
+  return rise ? 'down' : 'up';
+}
+function dirColor(n, strength) {
+  const t = Math.min(Math.abs(strength) / 15, 1);
+  const base = [42, 49, 64];
+  const rise = n > 0;
+  const hot = cfg.colors === 'tw'
+    ? (rise ? [255,110,96] : [86,227,155])
+    : (rise ? [86,227,155] : [255,110,96]);
+  const mix = base.map((b, i) => Math.round(b + (hot[i] - b) * (0.22 + 0.78 * t)));
+  return `rgb(${mix.join(',')})`;
+}
+
+/* ---------- 計算 ---------- */
+function compute() {
+  const rows = { tw:[], us:[] };
+  const fx = quotes?.fx || null;
+
+  for (const h of holdings) {
+    const isUS = h.market === 'us';
+    const q = isUS ? quotes?.us?.[h.code] : quotes?.tw?.[h.code];
+    const price = q?.price ?? null;
+    const prev = q?.prev ?? null;
+    const rate = isUS ? fx : 1;
+
+    const r = {
+      ...h,
+      costPerShare: h.cost,
+      name: q?.name || '',
+      price,
+      dayPct: (price != null && prev) ? (price - prev) / prev * 100 : null,
+      value: null, cost: null, pnl: null, retPct: null, ok: price != null && (!isUS || !!fx)
+    };
+    if (r.ok) {
+      r.value = price * h.shares * rate;
+      r.cost = h.cost * h.shares * rate;
+      r.pnl = r.value - r.cost;
+      r.retPct = r.cost ? r.pnl / r.cost * 100 : 0;
+    }
+    rows[isUS ? 'us' : 'tw'].push(r);
+  }
+
+  const all = [...rows.tw, ...rows.us].filter(r => r.ok);
+  const value = all.reduce((s, r) => s + r.value, 0);
+  const cost = all.reduce((s, r) => s + r.cost, 0);
+  const pnl = value - cost;
+
+  let worst = null, best = null;
+  for (const r of all) {
+    if (!worst || r.retPct < worst.retPct) worst = r;
+    if (!best || r.retPct > best.retPct) best = r;
+  }
+  return { rows, value, cost, pnl, retPct: cost ? pnl / cost * 100 : 0, fx, worst, best, all };
+}
+
+/* ---------- 畫面 ---------- */
+function render() {
+  const d = compute();
+
+  if (!holdings.length) return renderEmpty();
+
+  $('#hero').hidden = false;
+  const pnlEl = $('#pnl');
+  pnlEl.className = 'pnl ' + dirClass(d.pnl);
+  pnlEl.innerHTML = '<span class="cur">NT$</span>' + (d.all.length ? sgn(d.pnl) : '—');
+  const retEl = $('#ret');
+  retEl.className = 'v ' + dirClass(d.pnl);
+  retEl.textContent = d.all.length ? pct(d.retPct) : '—';
+
+  renderBand(d);
+  renderStats(d);
+  renderBooks(d);
+  renderTrend();
+}
+
+function renderEmpty() {
+  $('#hero').hidden = true;
+  $('#stats').innerHTML = '';
+  $('#trend').hidden = true;
+  $('#books').innerHTML = `
+    <div class="empty">
+      <p>還沒有任何持倉。加幾檔進來就會開始算損益。</p>
+      <div class="row">
+        <button class="btn solid" id="e1">新增持倉</button>
+        <button class="btn" id="e2">載入範例</button>
+      </div>
+    </div>`;
+  $('#e1').onclick = () => { openPanel(); addRow(); };
+  $('#e2').onclick = loadSample;
+}
+
+function renderBand(d) {
+  const band = $('#band');
+  band.innerHTML = '';
+  const list = d.all.slice().sort((a, b) => b.value - a.value);
+  const total = d.value || 1;
+
+  for (const r of list) {
+    const w = r.value / total * 100;
+    const seg = el('div', 'band-seg');
+    seg.style.width = w + '%';
+    seg.style.background = dirColor(r.pnl, r.retPct);
+    seg.title = `${r.code} ${r.name}　市值 NT$${twd(r.value)}　損益 ${sgn(r.pnl)}（${pct(r.retPct)}）`;
+    if (w > 6.5) { const s = el('span'); s.textContent = r.code; seg.appendChild(s); }
+    seg.onmouseenter = () => {
+      $('#bandInfo').innerHTML =
+        `<b>${r.code}</b> ${r.name}　佔比 ${nf2.format(w)}%　損益 <b>${sgn(r.pnl)}</b>（${pct(r.retPct)}）`;
+    };
+    seg.onmouseleave = () => {
+      $('#bandInfo').textContent = '每個色塊寬度是該檔佔總市值的比重，顏色深淺是它自己的報酬率';
+    };
+    band.appendChild(seg);
+  }
+  $('#bandCount').textContent = list.length ? `${list.length} 檔` : '';
+  $('#sweep').style.display = cfg.interval > 0 ? '' : 'none';
+}
+
+function renderStats(d) {
+  const cells = [
+    ['總市值', d.all.length ? 'NT$' + twd(d.value) : '—', d.all.length ? `${d.all.length} 檔在線` : '等待報價', 'flat'],
+    ['總投入成本', d.cost ? 'NT$' + twd(d.cost) : '—', '不含手續費', 'flat'],
+    ['最大拖累', d.worst ? pct(d.worst.retPct) : '—', d.worst ? `${d.worst.code} ${d.worst.name}` : '—', d.worst ? dirClass(d.worst.pnl) : 'flat'],
+    ['最佳表現', d.best ? pct(d.best.retPct) : '—', d.best ? `${d.best.code} ${d.best.name}` : '—', d.best ? dirClass(d.best.pnl) : 'flat'],
+    ['美元匯率', d.fx ? nf2.format(d.fx) : '—', 'USD / TWD', 'flat'],
+  ];
+  $('#stats').innerHTML = cells.map(([k, v, s, c]) =>
+    `<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`
+  ).join('');
+}
+
+function renderBooks(d) {
+  const box = $('#books');
+  box.innerHTML = '';
+  if (d.rows.tw.length) box.appendChild(bookTable('台股', 'TAIWAN', d.rows.tw, false, d));
+  if (d.rows.us.length) box.appendChild(bookTable('美股', 'UNITED STATES', d.rows.us, true, d));
+}
+
+function bookTable(title, eyebrow, rows, isUS, d) {
+  const sec = el('section', 'book');
+  const cur = isUS ? 'US$' : 'NT$';
+  const sum = rows.filter(r => r.ok);
+  const sv = sum.reduce((s, r) => s + r.value, 0);
+  const sp = sum.reduce((s, r) => s + r.pnl, 0);
+  const sc = sum.reduce((s, r) => s + r.cost, 0);
+
+  sec.innerHTML = `
+    <div class="book-head"><h2>${title}</h2><span class="eyebrow">${eyebrow}</span></div>
+    <div class="tscroll"><table>
+      <thead><tr>
+        <th>代號</th><th class="hide">股數</th><th class="hide">均價</th>
+        <th>現價</th><th>今日</th><th>市值 NT$</th><th>損益 NT$</th><th>報酬率</th>
+      </tr></thead>
+      <tbody>${rows.map(r => rowHTML(r, cur)).join('')}</tbody>
+      <tfoot><tr>
+        <td>小計</td><td class="hide"></td><td class="hide"></td><td></td><td></td>
+        <td>${twd(sv)}</td>
+        <td class="${dirClass(sp)}">${sgn(sp)}</td>
+        <td class="${dirClass(sp)}">${sc ? pct(sp / sc * 100) : '—'}</td>
+      </tr></tfoot>
+    </table></div>`;
+  return sec;
+}
+
+function rowHTML(r, cur) {
+  if (!r.ok) {
+    return `<tr><td><span class="code">${r.code}</span><span class="chip">查無報價</span></td>
+      <td class="hide">${nf0.format(r.shares)}</td>
+      <td class="hide">${nf2.format(r.costPerShare ?? 0)}</td>
+      <td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>`;
+  }
+  return `<tr>
+    <td><span class="code">${r.code}</span><span class="cname">${r.name}</span></td>
+    <td class="hide">${nf0.format(r.shares)}</td>
+    <td class="hide">${nf2.format(r.costPerShare)}</td>
+    <td>${nf2.format(r.price)}</td>
+    <td class="${dirClass(r.dayPct)}">${r.dayPct == null ? '—' : pct(r.dayPct)}</td>
+    <td>${twd(r.value)}</td>
+    <td class="${dirClass(r.pnl)}">${sgn(r.pnl)}</td>
+    <td class="${dirClass(r.pnl)}">${pct(r.retPct)}</td>
+  </tr>`;
+}
+
+/* ---------- 走勢 ---------- */
+function pushHistory(total) {
+  if (!Number.isFinite(total) || total <= 0) return;
+  const now = Date.now();
+  const last = history[history.length - 1];
+  if (last && now - last.t < 4 * 60 * 1000) { last.t = now; last.v = total; }
+  else history.push({ t: now, v: total });
+  if (history.length > 600) history = history.slice(-600);
+  store.set(K.hist, history);
+}
+
+function renderTrend() {
+  const sec = $('#trend');
+  if (history.length < 3) { sec.hidden = true; return; }
+  sec.hidden = false;
+
+  const W = 800, H = 120, pad = 4;
+  const vs = history.map(p => p.v);
+  const lo = Math.min(...vs), hi = Math.max(...vs);
+  const span = (hi - lo) || 1;
+  const x = i => (i / (history.length - 1)) * W;
+  const y = v => pad + (1 - (v - lo) / span) * (H - pad * 2);
+
+  const pts = history.map((p, i) => `${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+  const rising = vs[vs.length - 1] >= vs[0];
+  const col = (cfg.colors === 'tw' ? (rising ? '#FF6E60' : '#56E39B') : (rising ? '#56E39B' : '#FF6E60'));
+
+  $('#spark').innerHTML = `
+    <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.6"
+      vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    <line x1="0" y1="${y(vs[0]).toFixed(1)}" x2="${W}" y2="${y(vs[0]).toFixed(1)}"
+      stroke="#262E39" stroke-width="1" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>`;
+
+  const t0 = new Date(history[0].t), t1 = new Date(history[history.length - 1].t);
+  const f = dt => `${dt.getMonth() + 1}/${dt.getDate()} ${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+  $('#trendRange').textContent = `${f(t0)} → ${f(t1)}　NT$${twd(lo)} – ${twd(hi)}`;
+}
+
+/* ---------- 抓報價 ---------- */
+function setStatus(kind, text) {
+  $('#dot').className = 'dot ' + kind;
+  $('#statusText').textContent = text;
+}
+
+async function refresh() {
+  if (!cfg.url) {
+    setStatus('warn', '還沒設定報價來源');
+    showErr('報價來源沒填', '開「設定」把 Cloudflare Worker 網址貼進去，才抓得到價格。');
+    return;
+  }
+  if (!holdings.length) { setStatus('warn', '沒有持倉'); render(); return; }
+
+  setStatus('warn', '更新中…');
+  const tw = holdings.filter(h => h.market !== 'us').map(h => `${h.market}_${h.code}`);
+  const us = holdings.filter(h => h.market === 'us').map(h => h.code);
+  const url = cfg.url.replace(/\/+$/, '') + `/?tw=${encodeURIComponent(tw.join(','))}&us=${encodeURIComponent(us.join(','))}`;
+
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error('報價來源回應 HTTP ' + r.status);
+    quotes = await r.json();
+
+    const d = compute();
+    if (d.all.length) {
+      pushHistory(d.value);
+      if (lastTotal != null && Math.abs(d.pnl - lastTotal) > 1) blip(d.pnl - lastTotal, d.cost);
+      lastTotal = d.pnl;
+    }
+    render();
+
+    const t = new Date();
+    const hhmmss = t.toTimeString().slice(0, 8);
+    if (quotes.errors?.length) {
+      setStatus('warn', '部分沒抓到 · ' + hhmmss);
+      showErr('有些代號沒回報價', quotes.errors.join('；'));
+    } else {
+      setStatus('live', '已更新 ' + hhmmss);
+      showErr(null);
+    }
+    restartSweep();
+  } catch (e) {
+    setStatus('err', '連不上報價來源');
+    showErr('抓報價失敗', e.message + '。檢查設定裡的網址是否正確、Worker 是否已部署。');
+  }
+}
+
+function showErr(title, msg) {
+  $('#errbox').innerHTML = title ? `<div class="errbar"><b>${title}</b>${msg}</div>` : '';
+}
+
+function restartSweep() {
+  const s = $('#sweep');
+  s.style.setProperty('--cycle', (cfg.interval || 60) + 's');
+  s.style.animation = 'none';
+  void s.offsetWidth;
+  s.style.animation = '';
+}
+
+/* ---------- 音效 ---------- */
+let ac = null;
+function blip(delta, cost) {
+  if (!cfg.sound) return;
+  try {
+    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+    const big = cost && Math.abs(delta) / cost > 0.003;
+    const up = delta > 0;
+    const notes = big ? (up ? [523, 784, 1046] : [392, 294, 196]) : [up ? 880 : 620];
+    notes.forEach((f, i) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      const t = ac.currentTime + i * 0.07;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(big ? 0.09 : 0.045, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      o.connect(g); g.connect(ac.destination);
+      o.start(t); o.stop(t + 0.24);
+    });
+  } catch {}
+}
+
+/* ---------- 設定面板 ---------- */
+function openPanel() {
+  $('#workerUrl').value = cfg.url;
+  $('#interval').value = String(cfg.interval);
+  $('#colorSeg').querySelectorAll('button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.v === cfg.colors)));
+  drawRows();
+  $('#panel').classList.add('open');
+  $('#panel').setAttribute('aria-hidden', 'false');
+  $('#scrim').classList.add('open');
+}
+function closePanel() {
+  $('#panel').classList.remove('open');
+  $('#panel').setAttribute('aria-hidden', 'true');
+  $('#scrim').classList.remove('open');
+}
+
+function drawRows(list) {
+  const rows = list || (holdings.length ? holdings : []);
+  const box = $('#hrows');
+  box.innerHTML = '';
+  rows.forEach((h, i) => box.appendChild(rowEditor(h, i)));
+  if (!rows.length) box.appendChild(rowEditor({ market:'tse', code:'', shares:'', cost:'' }, 0));
+}
+
+function rowEditor(h) {
+  const g = el('div', 'hgrid');
+  g.innerHTML = `
+    <select class="m">
+      <option value="tse">上市</option>
+      <option value="otc">上櫃</option>
+      <option value="us">美股</option>
+    </select>
+    <input class="c" placeholder="2330" autocomplete="off" spellcheck="false">
+    <input class="s" type="number" step="any" min="0" placeholder="1000">
+    <input class="p" type="number" step="any" min="0" placeholder="580">
+    <button class="del" aria-label="刪除這列">×</button>`;
+  g.querySelector('.m').value = h.market || 'tse';
+  g.querySelector('.c').value = h.code || '';
+  g.querySelector('.s').value = h.shares ?? '';
+  g.querySelector('.p').value = h.cost ?? '';
+  g.querySelector('.del').onclick = () => g.remove();
+  return g;
+}
+function addRow() {
+  $('#hrows').appendChild(rowEditor({ market:'tse' }));
+  $('#hrows').lastElementChild.querySelector('.c').focus();
+}
+
+function collectRows() {
+  const out = [];
+  $('#hrows').querySelectorAll('.hgrid').forEach(g => {
+    const market = g.querySelector('.m').value;
+    const code = g.querySelector('.c').value.trim().toUpperCase();
+    const shares = parseFloat(g.querySelector('.s').value);
+    const cost = parseFloat(g.querySelector('.p').value);
+    if (!code || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(cost)) return;
+    out.push({ market, code, shares, cost });
+  });
+  return out;
+}
+
+function save() {
+  cfg.url = $('#workerUrl').value.trim();
+  cfg.interval = parseInt($('#interval').value, 10) || 0;
+  cfg.colors = $('#colorSeg').querySelector('[aria-pressed="true"]').dataset.v;
+  holdings = collectRows();
+  store.set(K.cfg, cfg);
+  store.set(K.hold, holdings);
+  closePanel();
+  schedule();
+  render();
+  refresh();
+}
+
+function schedule() {
+  if (timer) clearInterval(timer);
+  if (cfg.interval > 0) timer = setInterval(refresh, cfg.interval * 1000);
+}
+
+function loadSample() {
+  drawRows([
+    { market:'tse', code:'2330', shares:1000, cost:580 },
+    { market:'tse', code:'0050', shares:2000, cost:142.5 },
+    { market:'otc', code:'6488', shares:300, cost:820 },
+    { market:'us',  code:'NVDA', shares:30,  cost:118.4 },
+    { market:'us',  code:'VOO',  shares:12,  cost:498 },
+  ]);
+  openPanel();
+}
+
+/* ---------- 綁定 ---------- */
+$('#settingsBtn').onclick = openPanel;
+$('#closePanel').onclick = closePanel;
+$('#scrim').onclick = closePanel;
+$('#saveBtn').onclick = save;
+$('#addRow').onclick = addRow;
+$('#sampleBtn').onclick = loadSample;
+$('#refreshBtn').onclick = refresh;
+
+$('#colorSeg').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  $('#colorSeg').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+};
+
+const soundBtn = $('#soundBtn');
+function paintSound() {
+  soundBtn.textContent = cfg.sound ? '♪ 音效開' : '♪ 靜音';
+  soundBtn.classList.toggle('on', cfg.sound);
+}
+soundBtn.onclick = () => { cfg.sound = !cfg.sound; store.set(K.cfg, cfg); paintSound(); if (cfg.sound) blip(1, 0); };
+
+$('#exportBtn').onclick = () => {
+  const blob = new Blob([JSON.stringify({ holdings: collectRows(), config: cfg }, null, 2)], { type:'application/json' });
+  const a = el('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'holdings-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.click(); URL.revokeObjectURL(a.href);
+};
+$('#importBtn').onclick = () => $('#fileIn').click();
+$('#fileIn').onchange = async e => {
+  const f = e.target.files?.[0]; if (!f) return;
+  try {
+    const j = JSON.parse(await f.text());
+    if (Array.isArray(j.holdings)) drawRows(j.holdings);
+    if (j.config?.url) $('#workerUrl').value = j.config.url;
+  } catch { showErr('匯入失敗', '檔案不是這個頁面匯出的 JSON 格式。'); }
+  e.target.value = '';
+};
+$('#clearBtn').onclick = () => {
+  if (!confirm('刪掉所有持倉與走勢紀錄？無法復原。')) return;
+  holdings = []; history = [];
+  store.del(K.hold); store.del(K.hist);
+  drawRows(); closePanel(); render();
+};
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closePanel();
+  if (e.key === 'r' && !e.metaKey && !e.ctrlKey && document.activeElement.tagName !== 'INPUT') refresh();
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+
+/* ---------- 啟動 ---------- */
+paintSound();
+render();
+restartSweep();
+schedule();
+if (cfg.url && holdings.length) refresh();
+else if (!cfg.url) { setStatus('warn', '還沒設定報價來源'); }
+})();
+</script>
+</body>
+</html>

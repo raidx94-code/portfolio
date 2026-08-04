@@ -324,7 +324,8 @@
   <footer>
     損益以現價 × 股數 − 均價 × 股數計算，未扣手續費與交易稅，股利也不計入。<br>
     美股成本以目前匯率換算新台幣，與你實際買入當天的匯率會有落差。<br>
-    台股報價來自證交所，美股與匯率來自 Yahoo Finance。持倉資料只存在這台瀏覽器裡。
+    台股報價來自證交所，美股與匯率來自 Yahoo Finance。持倉資料只存在這台瀏覽器裡。<br>
+    <span id="build"></span>
   </footer>
 </div>
 
@@ -417,8 +418,24 @@ const store = {
 
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
+// 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
+const BUILD = 'v7';
+
 let holdings = store.get(K.hold, []);
-let cfg = Object.assign({ url:'', colors:'tw', interval:60, sound:false }, store.get(K.cfg, {}));
+/** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
+function defaultColors() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    if (/Taipei|Hong_Kong|Shanghai|Taiwan/i.test(tz)) return 'tw';
+    if (/^zh/i.test(navigator.language || '')) return 'tw';
+  } catch { /* 取不到就用預設 */ }
+  return 'us';
+}
+
+let cfg = Object.assign(
+  { url:'', colors: defaultColors(), interval:60, sound:false },
+  store.get(K.cfg, {})
+);
 let history = store.get(K.hist, []);
 let quotes = null, timer = null, lastTotal = null;
 
@@ -480,6 +497,10 @@ function twLimits(prev) {
 /** 回傳 'up' | 'down' | null。興櫃與美股沒有漲跌幅限制，不判。 */
 function limitState(r) {
   if (r.market !== 'tse' && r.market !== 'otc') return null;
+  // ETF 一律不判。國內成分 ETF 是 ±10%、槓桿型是 ±20%、
+  // 追蹤國外指數的（如 00685L）根本沒有漲跌幅限制，
+  // 規則差太多，寧可不標也不要標錯。
+  if (/^00/.test(r.code)) return null;
   const L = twLimits(r.prevClose);
   if (!L || r.price == null) return null;
   if (r.price >= L.up - 1e-6) return 'up';
@@ -1099,6 +1120,7 @@ document.addEventListener('keydown', e => {
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 
 /* ---------- 啟動 ---------- */
+$('#build').textContent = '建置 ' + BUILD;
 paintSound();
 render();
 restartSweep();

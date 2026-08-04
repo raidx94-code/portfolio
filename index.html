@@ -160,6 +160,14 @@
     padding:14px 15px 15px; display:flex; flex-direction:column;
   }
   .card.dead{opacity:.5}
+  /* 漲跌停：整張卡染色。顏色跟著「漲跌顏色」設定走。 */
+  .card.cap-up{border-color:var(--up); background:linear-gradient(170deg,#e2453b26,#e2453b08 60%)}
+  .card.cap-up .card-price{color:var(--up-hi)}
+  .card.cap-down{border-color:var(--down); background:linear-gradient(170deg,#2fbf7126,#2fbf7108 60%)}
+  .card.cap-down .card-price{color:var(--down-hi)}
+  .chip.cap{font-weight:600; letter-spacing:.12em}
+  .cap-up .chip.cap{border-color:var(--up); color:var(--up-hi)}
+  .cap-down .chip.cap{border-color:var(--down); color:var(--down-hi)}
   .card-top{display:flex; align-items:center; gap:8px}
   .card-top .code{
     font-family:var(--mono); font-size:13px; font-weight:600;
@@ -250,6 +258,9 @@
   }
   input:focus,select:focus{border-color:var(--amber); outline:none}
   .hgrid{display:grid; grid-template-columns:88px 1fr 1fr 1fr 30px; gap:7px; align-items:center; margin-bottom:7px}
+  .hgrid:not(.head){padding-bottom:9px; border-bottom:1px solid var(--rule-soft); margin-bottom:9px}
+  .hgrid .n{grid-column:2 / 5}
+  .hgrid-note{font-size:11px; color:var(--dimmer); margin:-2px 0 9px}
   .hgrid.head{font-family:var(--mono); font-size:10px; letter-spacing:.1em; color:var(--dim); text-transform:uppercase; margin-bottom:8px}
   .hgrid input,.hgrid select{padding:6px 7px; font-size:12.5px}
   .del{background:none;border:0;color:var(--dimmer);font-size:17px;line-height:1;padding:4px}
@@ -354,19 +365,29 @@
       <div class="hgrid head">
         <span>市場</span><span>代號</span><span>股數</span><span>均價</span><span></span>
       </div>
+      <div class="hgrid-note">名稱留空就用報價來源給的名字</div>
       <div id="hrows"></div>
       <button class="btn" id="addRow" style="margin-top:8px">新增一列</button>
-      <div class="hint">台股均價填新台幣，美股均價填美元。股數可填小數，碎股直接輸入 3.5 或 0.2547。上櫃股票要選「上櫃」，選錯會查不到價。</div>
+      <div class="hint">
+        台股均價填新台幣，美股均價填美元。股數可填小數，碎股直接輸入 3.5 或 0.2547。<br>
+        市場別選錯會查不到價。興櫃沒有漲跌幅限制，所以不會出現漲停跌停標示；
+        若興櫃查不到報價，用 <code>?probe=代號</code> 打一次 Worker 看哪個來源有資料。
+      </div>
     </div>
 
     <div class="field">
       <label>備份</label>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn" id="linkBtn">複製設定連結</button>
         <button class="btn" id="exportBtn">匯出 JSON</button>
         <button class="btn" id="importBtn">匯入 JSON</button>
         <button class="btn" id="clearBtn">清除全部</button>
       </div>
-      <div class="hint">清瀏覽器資料或換電腦就會消失，記得偶爾匯出一份。</div>
+      <div class="hint">
+        「複製設定連結」把持倉塞進網址的 # 片段，在另一台裝置開那個連結就會自動帶入，不用傳檔。
+        # 片段不會送到伺服器，但會留在你貼上的地方（訊息、記事本），自己斟酌。<br>
+        清瀏覽器資料或換裝置都會讓持倉消失，記得偶爾匯出一份存到 NAS。
+      </div>
       <input type="file" id="fileIn" accept=".json,application/json" hidden>
     </div>
   </div>
@@ -410,6 +431,8 @@ const nf2 = new Intl.NumberFormat('zh-TW', { minimumFractionDigits:2, maximumFra
 // 股數專用：整數就不顯示小數點，碎股最多顯示六位（券商通常給四到五位）
 const nfSh = new Intl.NumberFormat('zh-TW', { maximumFractionDigits:6 });
 const twd = n => (n < 0 ? '−' : '') + nf0.format(Math.abs(Math.round(n)));
+// 帶正負號的新台幣金額，用在統計格
+const sgnNT = n => (n > 0 ? '+' : n < 0 ? '−' : '') + 'NT$' + nf0.format(Math.abs(Math.round(n)));
 const sgn = n => (n > 0 ? '+' : n < 0 ? '−' : '') + nf0.format(Math.abs(Math.round(n)));
 const pct = n => (n > 0 ? '+' : n < 0 ? '−' : '') + nf2.format(Math.abs(n)) + '%';
 
@@ -431,6 +454,39 @@ function dirColor(n, strength) {
   return `rgb(${mix.join(',')})`;
 }
 
+/* ---------- 台股漲跌停 ---------- */
+/**
+ * 台股升降單位（股票）。漲停價是「昨收×1.1 往下取到合法檔位」，
+ * 所以高價股的漲停幅度會小於 10%：昨收 1090 的漲停是 1195，只有 +9.63%。
+ * 用固定 9.9% 當門檻會漏判，必須照檔位算。
+ */
+function twTick(p) {
+  if (p < 10) return 0.01;
+  if (p < 50) return 0.05;
+  if (p < 100) return 0.1;
+  if (p < 500) return 0.5;
+  if (p < 1000) return 1;
+  return 5;
+}
+function twLimits(prev) {
+  if (!Number.isFinite(prev) || prev <= 0) return null;
+  const snap = (v, down) => {
+    const t = twTick(v);
+    const n = down ? Math.floor(v / t + 1e-9) : Math.ceil(v / t - 1e-9);
+    return Math.round(n * t * 1e6) / 1e6;
+  };
+  return { up: snap(prev * 1.1, true), down: snap(prev * 0.9, false) };
+}
+/** 回傳 'up' | 'down' | null。興櫃與美股沒有漲跌幅限制，不判。 */
+function limitState(r) {
+  if (r.market !== 'tse' && r.market !== 'otc') return null;
+  const L = twLimits(r.prevClose);
+  if (!L || r.price == null) return null;
+  if (r.price >= L.up - 1e-6) return 'up';
+  if (r.price <= L.down + 1e-6) return 'down';
+  return null;
+}
+
 /* ---------- 計算 ---------- */
 function compute() {
   const rows = { tw:[], us:[] };
@@ -446,7 +502,9 @@ function compute() {
     const r = {
       ...h,
       costPerShare: h.cost,
-      name: q?.name || '',
+      // 自訂名稱優先。興櫃在 Yahoo 上常是拉丁縮寫（7853 回的是 cmit），
+      // 想看中文就自己填。
+      name: h.name || q?.name || '',
       price,
       dayPct: (price != null && prev) ? (price - prev) / prev * 100 : null,
       prevClose: prev,
@@ -469,10 +527,11 @@ function compute() {
   const cost = all.reduce((s, r) => s + r.cost, 0);
   const pnl = value - cost;
 
+  // 用實際損益金額排名，不是報酬率。小部位跌 46% 不算「最大拖累」。
   let worst = null, best = null;
   for (const r of all) {
-    if (!worst || r.retPct < worst.retPct) worst = r;
-    if (!best || r.retPct > best.retPct) best = r;
+    if (!worst || r.pnl < worst.pnl) worst = r;
+    if (!best || r.pnl > best.pnl) best = r;
   }
   return { rows, value, cost, pnl, retPct: cost ? pnl / cost * 100 : 0, fx, worst, best, all };
 }
@@ -544,8 +603,12 @@ function renderStats(d) {
   const cells = [
     ['總市值', d.all.length ? 'NT$' + twd(d.value) : '—', d.all.length ? `${d.all.length} 檔在線` : '等待報價', 'flat'],
     ['總投入成本', d.cost ? 'NT$' + twd(d.cost) : '—', '不含手續費', 'flat'],
-    ['最大拖累', d.worst ? pct(d.worst.retPct) : '—', d.worst ? `${d.worst.code} ${d.worst.name}` : '—', d.worst ? dirClass(d.worst.pnl) : 'flat'],
-    ['最佳表現', d.best ? pct(d.best.retPct) : '—', d.best ? `${d.best.code} ${d.best.name}` : '—', d.best ? dirClass(d.best.pnl) : 'flat'],
+    d.worst && d.worst.pnl < 0
+      ? ['最大拖累', sgnNT(d.worst.pnl), `${d.worst.code} ${d.worst.name} · ${pct(d.worst.retPct)}`, dirClass(d.worst.pnl)]
+      : ['最大拖累', d.all.length ? '無' : '—', d.all.length ? '全部部位獲利中' : '—', 'flat'],
+    d.best
+      ? ['最佳表現', sgnNT(d.best.pnl), `${d.best.code} ${d.best.name} · ${pct(d.best.retPct)}`, dirClass(d.best.pnl)]
+      : ['最佳表現', '—', '—', 'flat'],
     ['美元匯率', d.fx ? nf2.format(d.fx) : '—', 'USD / TWD', 'flat'],
   ];
   $('#stats').innerHTML = cells.map(([k, v, s, c]) =>
@@ -610,11 +673,15 @@ function cardHTML(r, isUS) {
   // 美股盤中是台灣時間 21:30–04:00。台灣白天打開時 Yahoo 回的是前一盤，
   // 這時候標「今日」會誤導，所以一律寫「較昨收」，並在收盤時掛一個標籤。
   const closed = r.state && r.state !== 'REGULAR';
+  const cap = limitState(r);
+  const capCls = cap ? 'cap-' + dirClass(cap === 'up' ? 1 : -1) : '';
+  const capTag = cap === 'up' ? '漲停' : cap === 'down' ? '跌停' : '';
 
-  return `<article class="card">
+  return `<article class="card ${capCls}">
     <div class="card-top">
       <span class="code">${r.code}</span>
       <span class="card-tags">
+        ${cap ? `<span class="chip cap">${capTag}</span>` : ''}
         ${closed ? '<span class="chip">收盤</span>' : ''}
         <span class="chip">${srcLabel}</span>
       </span>
@@ -832,18 +899,21 @@ function rowEditor(h) {
     <select class="m">
       <option value="tse">上市</option>
       <option value="otc">上櫃</option>
+      <option value="esb">興櫃</option>
       <option value="us">美股</option>
     </select>
     <input class="c" placeholder="2330" autocomplete="off" spellcheck="false">
     <input class="s" type="number" step="any" min="0" placeholder="1000 或 3.5">
     <input class="p" type="number" step="any" min="0" placeholder="580">
-    <button class="del" aria-label="刪除這列">×</button>`;
+    <button class="del" aria-label="刪除這列">×</button>
+    <input class="n" placeholder="自訂顯示名稱（可留空）" autocomplete="off">`;
   const mSel = g.querySelector('.m');
   const codeIn = g.querySelector('.c');
   mSel.value = h.market || 'tse';
   codeIn.value = h.code || '';
   g.querySelector('.s').value = h.shares ?? '';
   g.querySelector('.p').value = h.cost ?? '';
+  g.querySelector('.n').value = h.name || '';
   g.querySelector('.del').onclick = () => g.remove();
 
   // 依代號格式自動切市場別：純英文字母是美股，數字開頭是台股。
@@ -854,6 +924,7 @@ function rowEditor(h) {
     if (!v) return;
     if (/^[A-Z][A-Z.\-]*$/.test(v)) { if (mSel.value !== 'us') mSel.value = 'us'; }
     else if (/^\d/.test(v)) { if (mSel.value === 'us') mSel.value = 'tse'; }
+    // 已經選了上櫃或興櫃就不動 —— 那不是程式猜得出來的
   });
 
   return g;
@@ -870,8 +941,11 @@ function collectRows() {
     const code = g.querySelector('.c').value.trim().toUpperCase();
     const shares = parseFloat(g.querySelector('.s').value);
     const cost = parseFloat(g.querySelector('.p').value);
+    const name = g.querySelector('.n').value.trim();
     if (!code || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(cost)) return;
-    out.push({ market, code, shares, cost });
+    const row = { market, code, shares, cost };
+    if (name) row.name = name;
+    out.push(row);
   });
   return out;
 }
@@ -926,8 +1000,71 @@ function paintSound() {
 }
 soundBtn.onclick = () => { cfg.sound = !cfg.sound; store.set(K.cfg, cfg); paintSound(); if (cfg.sound) blip(1, 0); };
 
+/* ---------- 設定連結（跨裝置搬移） ---------- */
+const b64u = {
+  enc(str) {
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    bytes.forEach(b => { bin += String.fromCharCode(b); });
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  },
+  dec(s) {
+    const b = s.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b + '='.repeat((4 - b.length % 4) % 4));
+    return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+  }
+};
+
+function settingsPayload() {
+  return {
+    holdings: collectRows(),
+    config: {
+      url: $('#workerUrl').value.trim(),
+      interval: parseInt($('#interval').value, 10) || 0,
+      colors: $('#colorSeg').querySelector('[aria-pressed="true"]').dataset.v,
+    }
+  };
+}
+
+/** 網址帶 #d=... 時把設定填進面板，等使用者確認後再存 */
+function loadFromHash() {
+  const m = /[#&]d=([A-Za-z0-9\-_]+)/.exec(location.hash);
+  if (!m) return false;
+  // 不管成不成功都把 hash 清掉，避免重整又跑一次
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    const j = JSON.parse(b64u.dec(m[1]));
+    if (!Array.isArray(j.holdings)) throw new Error('格式不對');
+    openPanel();
+    drawRows(j.holdings);
+    if (j.config?.url) $('#workerUrl').value = j.config.url;
+    if (j.config?.interval != null) $('#interval').value = String(j.config.interval);
+    if (j.config?.colors) {
+      $('#colorSeg').querySelectorAll('button').forEach(x =>
+        x.setAttribute('aria-pressed', String(x.dataset.v === j.config.colors)));
+    }
+    showErr('已從連結帶入 ' + j.holdings.length + ' 筆持倉', '確認內容後按下方「儲存並更新」才會存進這台裝置。');
+    return true;
+  } catch (err) {
+    showErr('連結解不開', '可能是複製時被截斷了。改用「匯出 JSON」搬檔案比較保險。');
+    return false;
+  }
+}
+
+$('#linkBtn').onclick = async () => {
+  const link = location.origin + location.pathname + '#d=' + b64u.enc(JSON.stringify(settingsPayload()));
+  try {
+    await navigator.clipboard.writeText(link);
+    $('#linkBtn').textContent = '已複製到剪貼簿';
+    setTimeout(() => { $('#linkBtn').textContent = '複製設定連結'; }, 2000);
+  } catch {
+    // 沒有剪貼簿權限就讓使用者自己複製
+    prompt('自行複製這段網址：', link);
+  }
+};
+
 $('#exportBtn').onclick = () => {
-  const blob = new Blob([JSON.stringify({ holdings: collectRows(), config: cfg }, null, 2)], { type:'application/json' });
+  const blob = new Blob([JSON.stringify(settingsPayload(), null, 2)], { type:'application/json' });
   const a = el('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'holdings-' + new Date().toISOString().slice(0, 10) + '.json';
@@ -940,6 +1077,11 @@ $('#fileIn').onchange = async e => {
     const j = JSON.parse(await f.text());
     if (Array.isArray(j.holdings)) drawRows(j.holdings);
     if (j.config?.url) $('#workerUrl').value = j.config.url;
+    if (j.config?.interval != null) $('#interval').value = String(j.config.interval);
+    if (j.config?.colors) {
+      $('#colorSeg').querySelectorAll('button').forEach(x =>
+        x.setAttribute('aria-pressed', String(x.dataset.v === j.config.colors)));
+    }
   } catch { showErr('匯入失敗', '檔案不是這個頁面匯出的 JSON 格式。'); }
   e.target.value = '';
 };
@@ -960,9 +1102,12 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) refr
 paintSound();
 render();
 restartSweep();
+const fromLink = loadFromHash();
 schedule();
-if (cfg.url && holdings.length) refresh();
-else if (!cfg.url) { setStatus('warn', '還沒設定報價來源'); }
+if (!fromLink) {
+  if (cfg.url && holdings.length) refresh();
+  else if (!cfg.url) setStatus('warn', '還沒設定報價來源');
+}
 })();
 </script>
 </body>

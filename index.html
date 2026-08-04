@@ -75,6 +75,7 @@
     font-variant-numeric:tabular-nums;
   }
   .pnl .cur{font-size:.42em; font-weight:400; color:var(--dim); margin-right:.25em; letter-spacing:.04em}
+  .pnl .ph{font-size:.34em; font-weight:400; opacity:.3; letter-spacing:.05em}
   .ret{padding-bottom:6px}
   .ret .v{font-family:var(--mono); font-size:clamp(17px,3.4vw,25px); font-weight:500}
   .ret .k{font-size:11px; color:var(--dim); font-family:var(--mono); letter-spacing:.1em}
@@ -144,6 +145,61 @@
     display:inline-block; font-size:9.5px; padding:1px 5px; border:1px solid var(--rule);
     border-radius:2px; color:var(--dim); margin-left:8px; letter-spacing:.08em;
   }
+  .chip.bad{border-color:var(--amber); color:var(--amber-hi)}
+
+  /* ---------- 個股卡片 ---------- */
+  .subtotal{
+    display:flex; gap:18px; flex-wrap:wrap; align-items:baseline;
+    font-family:var(--mono); font-size:11.5px; color:var(--dim);
+    padding-bottom:14px; border-bottom:1px solid var(--rule-soft); margin-bottom:16px;
+  }
+  .subtotal b{font-weight:500; color:var(--ivory)}
+  .cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(228px,1fr)); gap:12px}
+  .card{
+    background:var(--ink2); border:1px solid var(--rule-soft); border-radius:3px;
+    padding:14px 15px 15px; display:flex; flex-direction:column;
+  }
+  .card.dead{opacity:.5}
+  .card-top{display:flex; align-items:center; gap:8px}
+  .card-top .code{
+    font-family:var(--mono); font-size:13px; font-weight:600;
+    color:var(--amber-hi); letter-spacing:.04em;
+  }
+  .card-top .chip{margin-left:auto}
+  .card-name{font-size:14px; font-weight:500; margin:2px 0 12px; letter-spacing:.02em}
+  .card-price{
+    font-family:var(--mono); font-size:29px; font-weight:600; line-height:1;
+    color:var(--ivory); font-variant-numeric:tabular-nums; letter-spacing:-.01em;
+  }
+  .card-price .unit{
+    font-size:.4em; font-weight:400; color:var(--dimmer);
+    margin-left:.4em; letter-spacing:.06em;
+  }
+  .card-day{font-family:var(--mono); font-size:11.5px; margin-top:6px}
+  .spark{margin:12px -3px 0}
+  .spark svg{width:100%; height:52px; display:block}
+  .spark-empty{
+    font-family:var(--mono); font-size:10.5px; color:var(--dimmer); text-align:center;
+    margin-top:12px; padding:19px 0;
+    border-top:1px solid var(--rule-soft); border-bottom:1px solid var(--rule-soft);
+  }
+  .card-rows{
+    margin:12px 0 0; padding-top:12px; border-top:1px solid var(--rule-soft);
+    display:grid; gap:5px;
+  }
+  .card-rows > div{display:flex; align-items:baseline; gap:8px}
+  .card-rows dt{font-size:11.5px; color:var(--dim); flex:none}
+  .card-rows dd{
+    margin:0 0 0 auto; font-family:var(--mono); font-size:12.5px;
+    font-variant-numeric:tabular-nums;
+  }
+  .card-pnl{
+    display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+    margin-top:auto; padding-top:12px; border-top:1px solid var(--rule);
+    font-family:var(--mono); font-weight:600; font-size:15px;
+  }
+  .card-pnl > span:first-child{padding-top:1px}
+  .card-pnl > span:last-child{font-size:12.5px; font-weight:500; opacity:.85}
 
   /* ---------- 走勢 ---------- */
   .trend{margin-top:44px}
@@ -390,6 +446,9 @@ function compute() {
       name: q?.name || '',
       price,
       dayPct: (price != null && prev) ? (price - prev) / prev * 100 : null,
+      prevClose: prev,
+      series: q?.series || [],
+      src: q?.src || null,
       value: null, cost: null, pnl: null, retPct: null, ok: price != null && (!isUS || !!fx)
     };
     if (r.ok) {
@@ -423,7 +482,8 @@ function render() {
   $('#hero').hidden = false;
   const pnlEl = $('#pnl');
   pnlEl.className = 'pnl ' + dirClass(d.pnl);
-  pnlEl.innerHTML = '<span class="cur">NT$</span>' + (d.all.length ? sgn(d.pnl) : '—');
+  pnlEl.innerHTML = '<span class="cur">NT$</span>' +
+    (d.all.length ? sgn(d.pnl) : '<span class="ph">尚無報價</span>');
   const retEl = $('#ret');
   retEl.className = 'v ' + dirClass(d.pnl);
   retEl.textContent = d.all.length ? pct(d.retPct) : '—';
@@ -492,53 +552,123 @@ function renderStats(d) {
 function renderBooks(d) {
   const box = $('#books');
   box.innerHTML = '';
-  if (d.rows.tw.length) box.appendChild(bookTable('台股', 'TAIWAN', d.rows.tw, false, d));
-  if (d.rows.us.length) box.appendChild(bookTable('美股', 'UNITED STATES', d.rows.us, true, d));
+  if (d.rows.tw.length) box.appendChild(bookSection('台股', 'TAIWAN MARKET', d.rows.tw, false));
+  if (d.rows.us.length) box.appendChild(bookSection('美股', 'UNITED STATES', d.rows.us, true));
 }
 
-function bookTable(title, eyebrow, rows, isUS, d) {
+function bookSection(title, eyebrow, rows, isUS) {
   const sec = el('section', 'book');
-  const cur = isUS ? 'US$' : 'NT$';
-  const sum = rows.filter(r => r.ok);
-  const sv = sum.reduce((s, r) => s + r.value, 0);
-  const sp = sum.reduce((s, r) => s + r.pnl, 0);
-  const sc = sum.reduce((s, r) => s + r.cost, 0);
+  const ok = rows.filter(r => r.ok);
+  const sv = ok.reduce((s, r) => s + r.value, 0);
+  const sp = ok.reduce((s, r) => s + r.pnl, 0);
+  const sc = ok.reduce((s, r) => s + r.cost, 0);
 
   sec.innerHTML = `
-    <div class="book-head"><h2>${title}</h2><span class="eyebrow">${eyebrow}</span></div>
-    <div class="tscroll"><table>
-      <thead><tr>
-        <th>代號</th><th class="hide">股數</th><th class="hide">均價</th>
-        <th>現價</th><th>今日</th><th>市值 NT$</th><th>損益 NT$</th><th>報酬率</th>
-      </tr></thead>
-      <tbody>${rows.map(r => rowHTML(r, cur)).join('')}</tbody>
-      <tfoot><tr>
-        <td>小計</td><td class="hide"></td><td class="hide"></td><td></td><td></td>
-        <td>${twd(sv)}</td>
-        <td class="${dirClass(sp)}">${sgn(sp)}</td>
-        <td class="${dirClass(sp)}">${sc ? pct(sp / sc * 100) : '—'}</td>
-      </tr></tfoot>
-    </table></div>`;
+    <div class="book-head">
+      <h2>${title}</h2>
+      <span class="eyebrow">${eyebrow}</span>
+    </div>
+    <div class="subtotal">
+      <span>${rows.length} 檔</span>
+      <span>市值 <b>NT$${twd(sv)}</b></span>
+      <span>損益 <b class="${dirClass(sp)}">${ok.length ? sgn(sp) : '—'}</b></span>
+      <span>報酬率 <b class="${dirClass(sp)}">${sc ? pct(sp / sc * 100) : '—'}</b></span>
+    </div>
+    <div class="cards">${rows.map(r => cardHTML(r, isUS)).join('')}</div>`;
   return sec;
 }
 
-function rowHTML(r, cur) {
+function cardHTML(r, isUS) {
+  const cur = isUS ? 'US$' : 'NT$';
+
   if (!r.ok) {
-    return `<tr><td><span class="code">${r.code}</span><span class="chip">查無報價</span></td>
-      <td class="hide">${nf0.format(r.shares)}</td>
-      <td class="hide">${nf2.format(r.costPerShare ?? 0)}</td>
-      <td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>`;
+    // 市場別跟代號格式對不起來，幾乎都是下拉選錯，直接講出來
+    const mismatch = (r.market !== 'us' && /^[A-Z]/i.test(r.code))
+                  || (r.market === 'us' && /^\d/.test(r.code));
+    const why = mismatch ? '市場別選錯了' : '查無報價';
+    return `<article class="card dead">
+      <div class="card-top">
+        <span class="code">${r.code}</span>
+        <span class="chip${mismatch ? ' bad' : ''}">${why}</span>
+      </div>
+      <div class="card-price flat">—</div>
+      <dl class="card-rows">
+        <div><dt>入場成本</dt><dd>${cur} ${nf2.format(r.costPerShare ?? 0)}</dd></div>
+        <div><dt>持有股數</dt><dd>${nf0.format(r.shares)}</dd></div>
+      </dl>
+    </article>`;
   }
-  return `<tr>
-    <td><span class="code">${r.code}</span><span class="cname">${r.name}</span></td>
-    <td class="hide">${nf0.format(r.shares)}</td>
-    <td class="hide">${nf2.format(r.costPerShare)}</td>
-    <td>${nf2.format(r.price)}</td>
-    <td class="${dirClass(r.dayPct)}">${r.dayPct == null ? '—' : pct(r.dayPct)}</td>
-    <td>${twd(r.value)}</td>
-    <td class="${dirClass(r.pnl)}">${sgn(r.pnl)}</td>
-    <td class="${dirClass(r.pnl)}">${pct(r.retPct)}</td>
-  </tr>`;
+
+  const dc = dirClass(r.dayPct);
+  const pc = dirClass(r.pnl);
+  const diff = r.price - r.costPerShare;
+  const srcLabel = r.src === 'twse' ? '證交所' : 'Yahoo';
+
+  return `<article class="card">
+    <div class="card-top">
+      <span class="code">${r.code}</span>
+      <span class="chip">${srcLabel}</span>
+    </div>
+    <div class="card-name">${r.name || '&nbsp;'}</div>
+
+    <div class="card-price">${nf2.format(r.price)}<span class="unit">${cur}</span></div>
+    <div class="card-day ${dc}">${r.dayPct == null ? '今日 —' : '今日 ' + pct(r.dayPct)}</div>
+
+    ${sparkHTML(r)}
+
+    <dl class="card-rows">
+      <div><dt>入場成本</dt><dd>${cur} ${nf2.format(r.costPerShare)}</dd></div>
+      <div><dt>持有股數</dt><dd>${nf0.format(r.shares)}</dd></div>
+      <div><dt>每股價差</dt><dd class="${pc}">${(diff > 0 ? '+' : diff < 0 ? '−' : '') + nf2.format(Math.abs(diff))}</dd></div>
+      <div><dt>市值</dt><dd>NT$${twd(r.value)}</dd></div>
+    </dl>
+
+    <div class="card-pnl">
+      <span class="${pc}">${r.pnl > 0 ? '賺' : r.pnl < 0 ? '賠' : '平'} NT$${twd(Math.abs(r.pnl))}</span>
+      <span class="${pc}">${pct(r.retPct)}</span>
+    </div>
+  </article>`;
+}
+
+/**
+ * 今日分時走勢。虛線是昨收，琥珀色點線是你的成本價（只在圖的範圍內才畫）。
+ * 線的顏色看今日方向，跟卡片上的漲跌幅一致。
+ */
+function sparkHTML(r) {
+  const s = (r.series || []).filter(v => Number.isFinite(v));
+  if (s.length < 3) return '<div class="spark-empty">今日尚無分時資料</div>';
+
+  const W = 240, H = 56, pad = 3;
+  const prev = Number.isFinite(r.prevClose) ? r.prevClose : null;
+  const pool = prev != null ? s.concat(prev) : s;
+  let lo = Math.min(...pool), hi = Math.max(...pool);
+  if (hi - lo < 1e-9) { hi += 0.5; lo -= 0.5; }
+  const span = hi - lo;
+
+  const x = i => (i / (s.length - 1)) * W;
+  const y = v => pad + (1 - (v - lo) / span) * (H - pad * 2);
+  const pts = s.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+
+  const col = dirClass(r.dayPct) === 'up' ? 'var(--up-hi)'
+            : dirClass(r.dayPct) === 'down' ? 'var(--down-hi)' : 'var(--dim)';
+
+  let lines = '';
+  if (prev != null) {
+    lines += `<line x1="0" y1="${y(prev).toFixed(1)}" x2="${W}" y2="${y(prev).toFixed(1)}"
+      stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>`;
+  }
+  // 成本線落在圖外就不畫，否則整條走勢會被壓成一條平線
+  const c = r.costPerShare;
+  if (Number.isFinite(c) && c >= lo && c <= hi) {
+    lines += `<line x1="0" y1="${y(c).toFixed(1)}" x2="${W}" y2="${y(c).toFixed(1)}"
+      stroke="var(--amber)" stroke-width="1" stroke-dasharray="1 3" vector-effect="non-scaling-stroke"/>`;
+  }
+
+  return `<div class="spark"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    ${lines}
+    <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5"
+      stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+  </svg></div>`;
 }
 
 /* ---------- 走勢 ---------- */
@@ -698,11 +828,24 @@ function rowEditor(h) {
     <input class="s" type="number" step="any" min="0" placeholder="1000">
     <input class="p" type="number" step="any" min="0" placeholder="580">
     <button class="del" aria-label="刪除這列">×</button>`;
-  g.querySelector('.m').value = h.market || 'tse';
-  g.querySelector('.c').value = h.code || '';
+  const mSel = g.querySelector('.m');
+  const codeIn = g.querySelector('.c');
+  mSel.value = h.market || 'tse';
+  codeIn.value = h.code || '';
   g.querySelector('.s').value = h.shares ?? '';
   g.querySelector('.p').value = h.cost ?? '';
   g.querySelector('.del').onclick = () => g.remove();
+
+  // 依代號格式自動切市場別：純英文字母是美股，數字開頭是台股。
+  // 台股沒有純字母的代號，美股沒有數字開頭的，所以這個判斷很安全。
+  // 已經選了「上櫃」就不動它 —— 上市上櫃只有你自己知道。
+  codeIn.addEventListener('input', () => {
+    const v = codeIn.value.trim().toUpperCase();
+    if (!v) return;
+    if (/^[A-Z][A-Z.\-]*$/.test(v)) { if (mSel.value !== 'us') mSel.value = 'us'; }
+    else if (/^\d/.test(v)) { if (mSel.value === 'us') mSel.value = 'tse'; }
+  });
+
   return g;
 }
 function addRow() {

@@ -266,8 +266,20 @@
   .del{background:none;border:0;color:var(--dimmer);font-size:17px;line-height:1;padding:4px}
   .del:hover{color:var(--up-hi)}
   .seg{display:flex; border:1px solid var(--rule); border-radius:2px; overflow:hidden}
-  .seg button{flex:1; background:transparent; border:0; color:var(--dim); padding:8px; font-size:12.5px}
-  .seg button[aria-pressed="true"]{background:var(--ink3); color:var(--ivory)}
+  .seg button{
+    flex:1; background:transparent; border:0; color:var(--dimmer);
+    padding:9px 8px; font-size:12.5px; position:relative; transition:color .15s, background .15s;
+  }
+  .seg button + button{border-left:1px solid var(--rule)}
+  .seg button:hover{color:var(--dim)}
+  /* 選中：加亮、加粗，底部一條琥珀色線，一眼看得出哪個生效 */
+  .seg button[aria-pressed="true"]{
+    background:var(--ink3); color:var(--ivory); font-weight:500;
+    box-shadow:inset 0 -2px 0 var(--amber);
+  }
+  .seg button[aria-pressed="true"]::before{content:'✓ '; color:var(--amber-hi)}
+  /* 焦點框畫在內側，否則會被 overflow:hidden 裁成一條線 */
+  .seg button:focus-visible{outline-offset:-3px}
 
   @media (max-width:620px){
     th.hide,td.hide{display:none}
@@ -348,6 +360,7 @@
         <button data-v="tw" aria-pressed="true">紅漲綠跌（台股）</button>
         <button data-v="us" aria-pressed="false">綠漲紅跌（美股）</button>
       </div>
+      <div class="hint">已依裝置時區自動選好，打勾的那個就是目前生效的，通常不用改。</div>
     </div>
 
     <div class="field">
@@ -419,7 +432,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v7';
+const BUILD = 'v8';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */

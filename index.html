@@ -165,7 +165,8 @@
     font-family:var(--mono); font-size:13px; font-weight:600;
     color:var(--amber-hi); letter-spacing:.04em;
   }
-  .card-top .chip{margin-left:auto}
+  .card-tags{margin-left:auto; display:flex; gap:6px; flex:none}
+  .card-tags .chip{margin-left:0}
   .card-name{font-size:14px; font-weight:500; margin:2px 0 12px; letter-spacing:.02em}
   .card-price{
     font-family:var(--mono); font-size:29px; font-weight:600; line-height:1;
@@ -355,7 +356,7 @@
       </div>
       <div id="hrows"></div>
       <button class="btn" id="addRow" style="margin-top:8px">新增一列</button>
-      <div class="hint">台股均價填新台幣，美股均價填美元。上櫃股票要選「上櫃」，選錯會查不到價。</div>
+      <div class="hint">台股均價填新台幣，美股均價填美元。股數可填小數，碎股直接輸入 3.5 或 0.2547。上櫃股票要選「上櫃」，選錯會查不到價。</div>
     </div>
 
     <div class="field">
@@ -406,6 +407,8 @@ const el = (t, c) => { const e = document.createElement(t); if (c) e.className =
 /* ---------- 格式 ---------- */
 const nf0 = new Intl.NumberFormat('zh-TW', { maximumFractionDigits:0 });
 const nf2 = new Intl.NumberFormat('zh-TW', { minimumFractionDigits:2, maximumFractionDigits:2 });
+// 股數專用：整數就不顯示小數點，碎股最多顯示六位（券商通常給四到五位）
+const nfSh = new Intl.NumberFormat('zh-TW', { maximumFractionDigits:6 });
 const twd = n => (n < 0 ? '−' : '') + nf0.format(Math.abs(Math.round(n)));
 const sgn = n => (n > 0 ? '+' : n < 0 ? '−' : '') + nf0.format(Math.abs(Math.round(n)));
 const pct = n => (n > 0 ? '+' : n < 0 ? '−' : '') + nf2.format(Math.abs(n)) + '%';
@@ -449,6 +452,7 @@ function compute() {
       prevClose: prev,
       series: q?.series || [],
       src: q?.src || null,
+      state: q?.state || null,
       value: null, cost: null, pnl: null, retPct: null, ok: price != null && (!isUS || !!fx)
     };
     if (r.ok) {
@@ -594,7 +598,7 @@ function cardHTML(r, isUS) {
       <div class="card-price flat">—</div>
       <dl class="card-rows">
         <div><dt>入場成本</dt><dd>${cur} ${nf2.format(r.costPerShare ?? 0)}</dd></div>
-        <div><dt>持有股數</dt><dd>${nf0.format(r.shares)}</dd></div>
+        <div><dt>持有股數</dt><dd>${nfSh.format(r.shares)}</dd></div>
       </dl>
     </article>`;
   }
@@ -603,22 +607,28 @@ function cardHTML(r, isUS) {
   const pc = dirClass(r.pnl);
   const diff = r.price - r.costPerShare;
   const srcLabel = r.src === 'twse' ? '證交所' : 'Yahoo';
+  // 美股盤中是台灣時間 21:30–04:00。台灣白天打開時 Yahoo 回的是前一盤，
+  // 這時候標「今日」會誤導，所以一律寫「較昨收」，並在收盤時掛一個標籤。
+  const closed = r.state && r.state !== 'REGULAR';
 
   return `<article class="card">
     <div class="card-top">
       <span class="code">${r.code}</span>
-      <span class="chip">${srcLabel}</span>
+      <span class="card-tags">
+        ${closed ? '<span class="chip">收盤</span>' : ''}
+        <span class="chip">${srcLabel}</span>
+      </span>
     </div>
     <div class="card-name">${r.name || '&nbsp;'}</div>
 
     <div class="card-price">${nf2.format(r.price)}<span class="unit">${cur}</span></div>
-    <div class="card-day ${dc}">${r.dayPct == null ? '今日 —' : '今日 ' + pct(r.dayPct)}</div>
+    <div class="card-day ${dc}">${r.dayPct == null ? '較昨收 —' : '較昨收 ' + pct(r.dayPct)}</div>
 
     ${sparkHTML(r)}
 
     <dl class="card-rows">
       <div><dt>入場成本</dt><dd>${cur} ${nf2.format(r.costPerShare)}</dd></div>
-      <div><dt>持有股數</dt><dd>${nf0.format(r.shares)}</dd></div>
+      <div><dt>持有股數</dt><dd>${nfSh.format(r.shares)}</dd></div>
       <div><dt>每股價差</dt><dd class="${pc}">${(diff > 0 ? '+' : diff < 0 ? '−' : '') + nf2.format(Math.abs(diff))}</dd></div>
       <div><dt>市值</dt><dd>NT$${twd(r.value)}</dd></div>
     </dl>
@@ -636,7 +646,7 @@ function cardHTML(r, isUS) {
  */
 function sparkHTML(r) {
   const s = (r.series || []).filter(v => Number.isFinite(v));
-  if (s.length < 3) return '<div class="spark-empty">今日尚無分時資料</div>';
+  if (s.length < 3) return '<div class="spark-empty">尚無分時資料</div>';
 
   const W = 240, H = 56, pad = 3;
   const prev = Number.isFinite(r.prevClose) ? r.prevClose : null;
@@ -825,7 +835,7 @@ function rowEditor(h) {
       <option value="us">美股</option>
     </select>
     <input class="c" placeholder="2330" autocomplete="off" spellcheck="false">
-    <input class="s" type="number" step="any" min="0" placeholder="1000">
+    <input class="s" type="number" step="any" min="0" placeholder="1000 或 3.5">
     <input class="p" type="number" step="any" min="0" placeholder="580">
     <button class="del" aria-label="刪除這列">×</button>`;
   const mSel = g.querySelector('.m');

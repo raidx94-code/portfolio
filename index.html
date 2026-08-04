@@ -469,7 +469,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v13';
+const BUILD = 'v15';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -482,8 +482,13 @@ function defaultColors() {
   return 'us';
 }
 
+// 預設報價來源。寫死在這裡，新裝置就不用手動貼網址。
+// 這個網址單獨曝光不洩漏任何東西 —— 它只是報價代理，讀持倉要另外帶密鑰。
+// 千萬不要把 token 寫在這裡：這個 repo 是公開的，等於把寫入權交出去。
+const DEFAULT_URL = 'https://quote-proxy.iamraidx94.workers.dev';
+
 let cfg = Object.assign(
-  { url:'', token:'', colors: defaultColors(), interval:60, sound:false, range:'d',
+  { url:DEFAULT_URL, token:'', colors: defaultColors(), interval:60, sound:false, range:'d',
     fee:{ on:true, buyIncluded:true, disc:1, min:20 } },
   store.get(K.cfg, {})
 );
@@ -524,12 +529,17 @@ async function kvPut(payload) {
  * 探測雲端狀態。讀不到就退回只用本機，不當成錯誤 ——
  * 使用者可能刻意不開同步。
  */
+let cloudWhy = '';   // 探測失敗的原因，顯示在設定面板
+
 async function probeCloud() {
-  if (!cfg.url) return 'off';
+  cloudWhy = '';
+  if (!cfg.url) { cloudWhy = '沒有設定報價來源網址'; return 'off'; }
   try {
     const j = await kvGet();
     return j.writable ? 'rw' : 'ro';
-  } catch {
+  } catch (e) {
+    // 靜靜地退回本機模式會讓人查不出原因，把訊息留下來
+    cloudWhy = e.message;
     return 'off';
   }
 }
@@ -538,7 +548,19 @@ async function probeCloud() {
 async function syncFromCloud() {
   try {
     const j = await kvGet();
-    holdings = j.holdings || [];
+    const cloudHold = j.holdings || [];
+
+    // 雲端是空的、本機卻有資料 → 絕對不要蓋掉。
+    // 這種情況通常是還沒把持倉推上 KV，若照蓋就會直接弄丟本機資料。
+    if (!cloudHold.length && holdings.length) {
+      history = j.history || history;
+      store.set(K.hist, history);
+      showErr('雲端上還沒有持倉',
+        `這台裝置有 ${holdings.length} 筆，已保留不覆蓋。到「設定」按一次「儲存並更新」就會推上雲端，其他裝置才看得到。`);
+      return true;
+    }
+
+    holdings = cloudHold;
     history = j.history || [];
     // 顏色與更新間隔跟著雲端走，但密鑰和網址永遠留在本機
     if (j.config && typeof j.config === 'object') {
@@ -721,13 +743,15 @@ function renderEmpty() {
   $('#stats').innerHTML = '';
   $('#books').innerHTML = `
     <div class="empty">
-      <p>還沒有任何持倉。加幾檔進來就會開始算損益。</p>
+      <p>這台裝置還沒有持倉。${cloudWhy
+        ? `<br>雲端讀取失敗：<b>${cloudWhy}</b>`
+        : (cloudMode !== 'off' ? '<br>雲端連上了，但 KV 裡目前沒有持倉。' : '<br>如果你已經啟用雲端同步，到「設定」填入同步密鑰就會自動帶進來。')}</p>
       <div class="row">
-        <button class="btn solid" id="e1">新增持倉</button>
+        <button class="btn solid" id="e1">開啟設定</button>
         <button class="btn" id="e2">載入範例</button>
       </div>
     </div>`;
-  $('#e1').onclick = () => { openPanel(); addRow(); };
+  $('#e1').onclick = () => { openPanel(); $('#token').focus(); };
   $('#e2').onclick = loadSample;
 }
 
@@ -1152,7 +1176,7 @@ function paintSyncState() {
   el2.textContent =
     cloudMode === 'rw' ? `目前：雲端同步中，可讀可寫，${n} 個走勢資料點在 KV。`
   : cloudMode === 'ro' ? `目前：雲端唯讀。這台裝置沒有密鑰，改持倉要填密鑰或到有密鑰的裝置上改。${n} 個走勢資料點。`
-  : `目前：只存在這台瀏覽器，${n} 個走勢資料點。`;
+  : `目前：只存在這台瀏覽器，${n} 個走勢資料點。` + (cloudWhy ? `（雲端讀取失敗：${cloudWhy}）` : '');
 }
 
 function closePanel() {

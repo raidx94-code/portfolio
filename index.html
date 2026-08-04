@@ -108,6 +108,8 @@
     display:flex; justify-content:space-between; margin-top:7px;
     font-family:var(--mono); font-size:10.5px; color:var(--dimmer);
   }
+  .feegrid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px}
+  .feegrid label{margin-bottom:5px}
   .seg.small button{padding:5px 11px; font-size:11.5px}
   .seg.small{flex:none}
 
@@ -336,7 +338,8 @@
   <div id="books"></div>
 
   <footer>
-    損益以現價 × 股數 − 均價 × 股數計算，未扣手續費與交易稅，股利也不計入。<br>
+    損益以現價 × 股數 − 均價 × 股數計算。手續費與交易稅可在設定裡開啟試算，股利一律不計入。<br>
+    除權息當天股價會自動調整，若均價未還原，帳面會先出現價差。<br>
     美股成本以目前匯率換算新台幣，與你實際買入當天的匯率會有落差。<br>
     台股報價來自證交所，美股與匯率來自 Yahoo Finance。持倉資料只存在這台瀏覽器裡。<br>
     <span id="build"></span>
@@ -373,6 +376,28 @@
         <button data-v="us" aria-pressed="false">綠漲紅跌（美股）</button>
       </div>
       <div class="hint">已依裝置時區自動選好，打勾的那個就是目前生效的，通常不用改。</div>
+    </div>
+
+    <div class="field">
+      <label>損益計算方式</label>
+      <div class="seg" id="feeSeg">
+        <button data-v="0" aria-pressed="true">純價差</button>
+        <button data-v="1" aria-pressed="false">扣手續費與交易稅</button>
+      </div>
+      <div class="feegrid">
+        <div><label for="feeDisc">手續費折扣</label><input id="feeDisc" type="number" step="0.01" min="0.01" max="1" placeholder="1"></div>
+        <div><label for="feeMin">單筆最低</label><input id="feeMin" type="number" step="1" min="0" placeholder="20"></div>
+      </div>
+      <div class="seg" id="buySeg" style="margin-top:10px">
+        <button data-v="1" aria-pressed="true">均價已含買進手續費</button>
+        <button data-v="0" aria-pressed="false">均價不含，另外扣</button>
+      </div>
+      <div class="hint">
+        折扣填小數：6 折填 <code>0.6</code>、無折扣填 <code>1</code>。零股手續費有優惠的券商，單筆最低可填 1 或 0。<br>
+        證交稅股票 0.3%、ETF 0.1%，美股不試算。<br>
+        <b>券商 APP 的「預估損益」通常等於：純價差 − 市值 × 0.4425%</b>（賣出手續費 0.1425% + 證交稅 0.3%），
+        因為買進手續費已經算進它顯示的均價。要跟 APP 對得起來就用預設這組。
+      </div>
     </div>
 
     <div class="field">
@@ -444,7 +469,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v11';
+const BUILD = 'v13';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -458,7 +483,8 @@ function defaultColors() {
 }
 
 let cfg = Object.assign(
-  { url:'', token:'', colors: defaultColors(), interval:60, sound:false, range:'d' },
+  { url:'', token:'', colors: defaultColors(), interval:60, sound:false, range:'d',
+    fee:{ on:true, buyIncluded:true, disc:1, min:20 } },
   store.get(K.cfg, {})
 );
 let history = store.get(K.hist, []);
@@ -558,6 +584,29 @@ function dirColor(n, strength) {
   return `rgb(${mix.join(',')})`;
 }
 
+/* ---------- 費用試算 ---------- */
+/**
+ * 台股買賣成本。券商 APP 的「損益」多半已經扣掉這些，
+ * 所以純價差跟 APP 對不上是正常的。
+ *   手續費 0.1425%，可打折，單筆有最低金額（零股影響很大）
+ *   證交稅 賣出時收，股票 0.3%、ETF 0.1%
+ * 美股券商費用差異太大（很多是零手續費），不做試算。
+ */
+function feesFor(r) {
+  const f = cfg.fee || {};
+  if (!f.on || r.market === 'us') return 0;
+  const disc = Number.isFinite(+f.disc) && +f.disc > 0 ? +f.disc : 1;
+  const min = Number.isFinite(+f.min) ? +f.min : 0;
+
+  // 券商顯示的均價通常已經含買進手續費，再扣一次會過度扣除。
+  // 用 2408 與 6525 兩筆實際對帳確認過：券商只扣賣出手續費加證交稅。
+  const buy = f.buyIncluded ? 0 : Math.max(r.cost * 0.001425 * disc, min);
+  const sell = Math.max(r.value * 0.001425 * disc, min);
+  const taxRate = /^00/.test(r.code) ? 0.001 : 0.003;
+  // 券商對手續費與稅都是捨去到整數
+  return Math.floor(buy) + Math.floor(sell) + Math.floor(r.value * taxRate);
+}
+
 /* ---------- 台股漲跌停 ---------- */
 /**
  * 台股升降單位（股票）。漲停價是「昨收×1.1 往下取到合法檔位」，
@@ -624,7 +673,9 @@ function compute() {
     if (r.ok) {
       r.value = price * h.shares * rate;
       r.cost = h.cost * h.shares * rate;
-      r.pnl = r.value - r.cost;
+      r.gross = r.value - r.cost;          // 純價差
+      r.fees = feesFor(r);                 // 手續費 + 交易稅（可關閉）
+      r.pnl = r.gross - r.fees;            // 畫面上顯示的損益
       r.retPct = r.cost ? r.pnl / r.cost * 100 : 0;
     }
     rows[isUS ? 'us' : 'tw'].push(r);
@@ -633,7 +684,8 @@ function compute() {
   const all = [...rows.tw, ...rows.us].filter(r => r.ok);
   const value = all.reduce((s, r) => s + r.value, 0);
   const cost = all.reduce((s, r) => s + r.cost, 0);
-  const pnl = value - cost;
+  const fees = all.reduce((s, r) => s + (r.fees || 0), 0);
+  const pnl = value - cost - fees;
 
   // 用實際損益金額排名，不是報酬率。小部位跌 46% 不算「最大拖累」。
   let worst = null, best = null;
@@ -641,7 +693,7 @@ function compute() {
     if (!worst || r.pnl < worst.pnl) worst = r;
     if (!best || r.pnl > best.pnl) best = r;
   }
-  return { rows, value, cost, pnl, retPct: cost ? pnl / cost * 100 : 0, fx, worst, best, all };
+  return { rows, value, cost, fees, pnl, retPct: cost ? pnl / cost * 100 : 0, fx, worst, best, all };
 }
 
 /* ---------- 畫面 ---------- */
@@ -682,7 +734,8 @@ function renderEmpty() {
 function renderStats(d) {
   const cells = [
     ['總市值', d.all.length ? 'NT$' + twd(d.value) : '—', d.all.length ? `${d.all.length} 檔在線` : '等待報價', 'flat'],
-    ['總投入成本', d.cost ? 'NT$' + twd(d.cost) : '—', '不含手續費', 'flat'],
+    ['總投入成本', d.cost ? 'NT$' + twd(d.cost) : '—',
+      cfg.fee?.on ? '損益已扣賣出費用 NT$' + twd(d.fees) : '損益為純價差', 'flat'],
     d.worst && d.worst.pnl < 0
       ? ['最大拖累', sgnNT(d.worst.pnl), `${d.worst.code} ${d.worst.name} · ${pct(d.worst.retPct)}`, dirClass(d.worst.pnl)]
       : ['最大拖累', d.all.length ? '無' : '—', d.all.length ? '全部部位獲利中' : '—', 'flat'],
@@ -778,6 +831,7 @@ function cardHTML(r, isUS) {
       <div><dt>持有股數</dt><dd>${nfSh.format(r.shares)}</dd></div>
       <div><dt>每股價差</dt><dd class="${pc}">${(diff > 0 ? '+' : diff < 0 ? '−' : '') + nf2.format(Math.abs(diff))}</dd></div>
       <div><dt>市值</dt><dd>NT$${twd(r.value)}</dd></div>
+      ${r.fees > 0 ? `<div><dt>賣出費用</dt><dd class="flat">−NT$${twd(r.fees)}</dd></div>` : ''}
     </dl>
 
     <div class="card-pnl">
@@ -1077,6 +1131,13 @@ function openPanel() {
   $('#token').value = cfg.token || '';
   paintSyncState();
   $('#interval').value = String(cfg.interval);
+  const f = cfg.fee || {};
+  $('#feeDisc').value = f.disc ?? 1;
+  $('#feeMin').value = f.min ?? 20;
+  $('#feeSeg').querySelectorAll('button').forEach(b2 =>
+    b2.setAttribute('aria-pressed', String((b2.dataset.v === '1') === !!f.on)));
+  $('#buySeg').querySelectorAll('button').forEach(b2 =>
+    b2.setAttribute('aria-pressed', String((b2.dataset.v === '1') === (f.buyIncluded !== false))));
   $('#colorSeg').querySelectorAll('button').forEach(b =>
     b.setAttribute('aria-pressed', String(b.dataset.v === cfg.colors)));
   drawRows();
@@ -1170,6 +1231,12 @@ async function save() {
   cfg.token = $('#token').value.trim();
   cfg.interval = parseInt($('#interval').value, 10) || 0;
   cfg.colors = $('#colorSeg').querySelector('[aria-pressed="true"]').dataset.v;
+  cfg.fee = {
+    on: $('#feeSeg').querySelector('[aria-pressed="true"]').dataset.v === '1',
+    buyIncluded: $('#buySeg').querySelector('[aria-pressed="true"]').dataset.v === '1',
+    disc: parseFloat($('#feeDisc').value) || 1,
+    min: parseFloat($('#feeMin').value) || 0,
+  };
   const rows = collectRows();
   store.set(K.cfg, cfg);
 
@@ -1180,7 +1247,7 @@ async function save() {
   }
 
   if (canWriteCloud()) {
-    const payload = { config: { colors: cfg.colors, interval: cfg.interval, range: cfg.range } };
+    const payload = { config: { colors: cfg.colors, interval: cfg.interval, range: cfg.range, fee: cfg.fee } };
     // 表單是空的就不要寫，改成從雲端拉。
     // 這樣「用設定連結在新裝置開啟」不會把 KV 上的持倉清掉。
     if (rows.length) payload.holdings = rows;
@@ -1245,10 +1312,12 @@ window.addEventListener('resize', () => {
   rzT = setTimeout(renderTrend, 150);
 });
 
-$('#colorSeg').onclick = e => {
-  const b = e.target.closest('button'); if (!b) return;
-  $('#colorSeg').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
-};
+for (const id of ['#colorSeg', '#feeSeg', '#buySeg']) {
+  $(id).onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    $(id).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  };
+}
 
 const soundBtn = $('#soundBtn');
 function paintSound() {

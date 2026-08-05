@@ -416,6 +416,15 @@
     </div>
 
     <div class="field">
+      <label for="soundMin">音效觸發門檻</label>
+      <input id="soundMin" type="number" step="100" min="0" placeholder="1000">
+      <div class="hint">
+        總損益變動達這個金額（新台幣）才發聲，達五倍改成三連音。填 0 等於每次更新都響。<br>
+        右上角的「靜音」是總開關。音效設定只影響這台裝置，不會同步到其他裝置。
+      </div>
+    </div>
+
+    <div class="field">
       <label>持倉</label>
       <div class="hgrid head">
         <span>市場</span><span>代號</span><span>股數</span><span>均價</span><span></span>
@@ -473,7 +482,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v16';
+const BUILD = 'v18';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -493,7 +502,7 @@ const DEFAULT_URL = 'https://quote-proxy.iamraidx94.workers.dev';
 
 let cfg = Object.assign(
   { url:DEFAULT_URL, token:'', colors: defaultColors(), interval:60, sound:false, range:'d',
-    fee:{ on:true, buyIncluded:true, disc:1, min:20 } },
+    soundMin:1000, fee:{ on:true, buyIncluded:true, disc:1, min:20 } },
   store.get(K.cfg, {})
 );
 let history = store.get(K.hist, []);
@@ -1084,6 +1093,37 @@ function fmtTime(t) {
   return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/* ---------- 報價合併：永不倒退 ---------- */
+/**
+ * 每次抓到新報價後，逐檔跟上一次比時間戳，只有更新的才替換。
+ *
+ * 要解決的情境：09:55 拿到證交所的即時價，09:56 證交所斷線退回 Yahoo，
+ * 而 Yahoo 是 09:40 的資料 —— 沒有這層比對的話整頁會退回 15 分鐘前。
+ *
+ * 順帶處理兩件事：這次沒回報價的代號沿用上次的；匯率抓失敗時沿用上次的
+ * （否則所有美股持倉會一起變成「查無報價」）。
+ */
+function mergeQuotes(prev, fresh) {
+  const out = { ...fresh };
+  for (const side of ['tw', 'us']) {
+    out[side] = { ...(fresh[side] || {}) };
+    const old = prev?.[side] || {};
+    for (const [code, o] of Object.entries(old)) {
+      const n = out[side][code];
+      if (!n) { out[side][code] = o; continue; }          // 這次沒回，留舊的
+      const nt = n.qts || 0, ot = o.qts || 0;
+      if (ot > nt) {
+        // 舊的比較新 —— 保留它，但走勢序列取有內容的那份
+        out[side][code] = { ...o, series: (n.series?.length ? n.series : o.series) || [] };
+      } else if (!n.series?.length && o.series?.length) {
+        out[side][code] = { ...n, series: o.series };
+      }
+    }
+  }
+  if (out.fx == null && prev?.fx != null) out.fx = prev.fx;
+  return out;
+}
+
 /* ---------- 抓報價 ---------- */
 function setStatus(kind, text) {
   $('#dot').className = 'dot ' + kind;
@@ -1106,12 +1146,12 @@ async function refresh() {
   try {
     const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) throw new Error('報價來源回應 HTTP ' + r.status);
-    quotes = await r.json();
+    quotes = mergeQuotes(quotes, await r.json());
 
     const d = compute();
     if (d.all.length) {
       pushHistory(d.value);
-      if (lastTotal != null && Math.abs(d.pnl - lastTotal) > 1) blip(d.pnl - lastTotal, d.cost);
+       if (lastTotal != null) blip(d.pnl - lastTotal);
       lastTotal = d.pnl;
     }
     render();
@@ -1137,11 +1177,14 @@ function showErr(title, msg) {
 
 /* ---------- 音效 ---------- */
 let ac = null;
-function blip(delta, cost) {
+function blip(delta, force) {
   if (!cfg.sound) return;
+  const min = Number.isFinite(+cfg.soundMin) ? +cfg.soundMin : 1000;
+  // 門檻以下不發聲。舊版是「變動超過 1 元」就叫，等於每分鐘響一次。
+  if (!force && Math.abs(delta) < min) return;
   try {
     ac = ac || new (window.AudioContext || window.webkitAudioContext)();
-    const big = cost && Math.abs(delta) / cost > 0.003;
+    const big = !force && Math.abs(delta) >= min * 5;   // 五倍門檻才用三連音
     const up = delta > 0;
     const notes = big ? (up ? [523, 784, 1046] : [392, 294, 196]) : [up ? 880 : 620];
     notes.forEach((f, i) => {
@@ -1166,6 +1209,7 @@ function openPanel() {
   const f = cfg.fee || {};
   $('#feeDisc').value = f.disc ?? 1;
   $('#feeMin').value = f.min ?? 20;
+  $('#soundMin').value = cfg.soundMin ?? 1000;
   $('#feeSeg').querySelectorAll('button').forEach(b2 =>
     b2.setAttribute('aria-pressed', String((b2.dataset.v === '1') === !!f.on)));
   $('#buySeg').querySelectorAll('button').forEach(b2 =>
@@ -1263,6 +1307,7 @@ async function save() {
   cfg.token = $('#token').value.trim();
   cfg.interval = parseInt($('#interval').value, 10) || 0;
   cfg.colors = $('#colorSeg').querySelector('[aria-pressed="true"]').dataset.v;
+  cfg.soundMin = Math.max(0, parseFloat($('#soundMin').value) || 0);
   cfg.fee = {
     on: $('#feeSeg').querySelector('[aria-pressed="true"]').dataset.v === '1',
     buyIncluded: $('#buySeg').querySelector('[aria-pressed="true"]').dataset.v === '1',
@@ -1356,7 +1401,12 @@ function paintSound() {
   soundBtn.textContent = cfg.sound ? '♪ 音效開' : '♪ 靜音';
   soundBtn.classList.toggle('on', cfg.sound);
 }
-soundBtn.onclick = () => { cfg.sound = !cfg.sound; store.set(K.cfg, cfg); paintSound(); if (cfg.sound) blip(1, 0); };
+soundBtn.onclick = () => {
+  cfg.sound = !cfg.sound;
+  store.set(K.cfg, cfg);
+  paintSound();
+  if (cfg.sound) blip(1, true);   // 開啟時試聽一聲
+};
 
 /* ---------- 設定連結（跨裝置搬移） ---------- */
 const b64u = {

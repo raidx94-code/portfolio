@@ -205,10 +205,16 @@
   .card-price{
     font-family:var(--mono); font-size:29px; font-weight:600; line-height:1;
     color:var(--ivory); font-variant-numeric:tabular-nums; letter-spacing:-.01em;
+    display:flex; align-items:baseline; flex-wrap:wrap; row-gap:3px;
   }
   .card-price .unit{
     font-size:.4em; font-weight:400; color:var(--dimmer);
     margin-left:.4em; letter-spacing:.06em;
+  }
+  /* 漲跌點數。顏色由 .up / .down 決定，這裡不設 color。 */
+  .card-price .chg{
+    font-size:.48em; font-weight:500; margin-left:.55em;
+    letter-spacing:0; white-space:nowrap;
   }
   .card-day{
     font-family:var(--mono); font-size:11.5px; margin-top:6px;
@@ -506,7 +512,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v21';
+const BUILD = 'v22';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -939,11 +945,10 @@ function cardHTML(r, isUS) {
     </div>
     <div class="card-name">${r.name || '&nbsp;'}</div>
 
-    <div class="card-price">${nf2.format(r.price)}<span class="unit">${cur}</span></div>
-    <div class="card-day ${dc}">${r.dayPct == null
-      ? '較昨收 —'
-      : `較昨收 ${dayDiff == null ? '' : sgn2(dayDiff) + ' '}${pct(r.dayPct)}`
-    }<span class="qt">${qt ? '報價 ' + qt : ''}</span></div>
+    <div class="card-price">${nf2.format(r.price)}<span class="unit">${cur}</span>${
+      dayDiff == null ? '' : `<span class="chg ${dc}">${sgn2(dayDiff)}</span>`
+    }</div>
+    <div class="card-day ${dc}">${r.dayPct == null ? '較昨收 —' : '較昨收 ' + pct(r.dayPct)}<span class="qt">${qt ? '報價 ' + qt : ''}</span></div>
 
     ${sparkHTML(r)}
 

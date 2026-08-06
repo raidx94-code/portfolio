@@ -212,9 +212,10 @@
   }
   .card-day{
     font-family:var(--mono); font-size:11.5px; margin-top:6px;
-    display:flex; align-items:baseline; gap:8px;
+    display:flex; align-items:baseline; flex-wrap:wrap;
+    column-gap:8px; row-gap:2px;
   }
-  .card-day .qt{margin-left:auto; color:var(--dimmer); font-size:10.5px}
+  .card-day .qt{margin-left:auto; color:var(--dimmer); font-size:10.5px; white-space:nowrap}
   .spark{margin:12px -3px 0}
   .spark svg{width:100%; height:52px; display:block}
   .spark-empty{
@@ -505,7 +506,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v20';
+const BUILD = 'v21';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -621,6 +622,8 @@ const nfSh = new Intl.NumberFormat('zh-TW', { maximumFractionDigits:6 });
 const twd = n => (n < 0 ? '−' : '') + nf0.format(Math.abs(Math.round(n)));
 // 帶正負號的新台幣金額，用在統計格
 const sgnNT = n => (n > 0 ? '+' : n < 0 ? '−' : '') + 'NT$' + nf0.format(Math.abs(Math.round(n)));
+// 帶正負號的兩位小數，用在漲跌點數與每股價差
+const sgn2 = n => (n > 0 ? '+' : n < 0 ? '−' : '') + nf2.format(Math.abs(n));
 const sgn = n => (n > 0 ? '+' : n < 0 ? '−' : '') + nf0.format(Math.abs(Math.round(n)));
 const pct = n => (n > 0 ? '+' : n < 0 ? '−' : '') + nf2.format(Math.abs(n)) + '%';
 
@@ -811,7 +814,7 @@ function renderMarket() {
     const diff = q.prev ? q.price - q.prev : null;
     const p = q.prev ? diff / q.prev * 100 : null;
     const cls = dirClass(diff);
-    const t = q.time || (q.qts ? new Date(q.qts).toTimeString().slice(0, 5) : '');
+    const t = (q.time || (q.qts ? new Date(q.qts).toTimeString() : '')).slice(0, 5);
     cells.push(`<div class="mk">
       <div class="k">${label}<span class="tag">${q.src === 'twse' ? '證交所' : 'Yahoo'} ${t}</span></div>
       <div class="v ${cls}">${nf2.format(q.price)}</div>
@@ -913,6 +916,8 @@ function cardHTML(r, isUS) {
   const dc = dirClass(r.dayPct);
   const pc = dirClass(r.pnl);
   const diff = r.price - r.costPerShare;
+  // 較昨收的絕對變動。只有百分比看不出來實際跳幾點／幾塊。
+  const dayDiff = (r.price != null && Number.isFinite(r.prevClose)) ? r.price - r.prevClose : null;
   const srcLabel = r.src === 'twse' ? '證交所' : 'Yahoo';
   // 美股盤中是台灣時間 21:30–04:00。台灣白天打開時 Yahoo 回的是前一盤，
   // 這時候標「今日」會誤導，所以一律寫「較昨收」，並在收盤時掛一個標籤。
@@ -935,16 +940,18 @@ function cardHTML(r, isUS) {
     <div class="card-name">${r.name || '&nbsp;'}</div>
 
     <div class="card-price">${nf2.format(r.price)}<span class="unit">${cur}</span></div>
-    <div class="card-day ${dc}">${r.dayPct == null ? '較昨收 —' : '較昨收 ' + pct(r.dayPct)}<span class="qt">${qt ? '報價 ' + qt : ''}</span></div>
+    <div class="card-day ${dc}">${r.dayPct == null
+      ? '較昨收 —'
+      : `較昨收 ${dayDiff == null ? '' : sgn2(dayDiff) + ' '}${pct(r.dayPct)}`
+    }<span class="qt">${qt ? '報價 ' + qt : ''}</span></div>
 
     ${sparkHTML(r)}
 
     <dl class="card-rows">
       <div><dt>入場成本</dt><dd>${cur} ${nf2.format(r.costPerShare)}</dd></div>
       <div><dt>持有股數</dt><dd>${nfSh.format(r.shares)}</dd></div>
-      <div><dt>每股價差</dt><dd class="${pc}">${(diff > 0 ? '+' : diff < 0 ? '−' : '') + nf2.format(Math.abs(diff))}</dd></div>
+      <div><dt>每股價差</dt><dd class="${pc}">${sgn2(diff)}</dd></div>
       <div><dt>市值</dt><dd>NT$${twd(r.value)}</dd></div>
-      ${r.fees > 0 ? `<div><dt>賣出費用</dt><dd class="flat">−NT$${twd(r.fees)}</dd></div>` : ''}
     </dl>
 
     <div class="card-pnl">

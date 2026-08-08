@@ -475,6 +475,7 @@
         <button class="btn" id="linkBtn">複製設定連結</button>
         <button class="btn" id="exportBtn">匯出 JSON</button>
         <button class="btn" id="importBtn">匯入 JSON</button>
+        <button class="btn" id="clearHistBtn">清除走勢紀錄</button>
         <button class="btn" id="clearBtn">清除全部</button>
       </div>
       <div class="hint">
@@ -512,7 +513,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v22';
+const BUILD = 'v23';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -1034,7 +1035,7 @@ function compactHistory(h) {
  */
 function renderTrend() {
   const plot = $('#trendPlot');
-  const pts = historyInRange();
+  const { pts, dropped } = despike(historyInRange());
 
   if (pts.length < 2) {
     plot.innerHTML = `<div class="trend-empty">
@@ -1105,10 +1106,30 @@ function renderTrend() {
     </g>
   </svg>`;
 
-  $('#trendFrom').textContent = fmtTime(pts[0].t);
+  $('#trendFrom').textContent = fmtTime(pts[0].t) + (dropped ? `　已濾除 ${dropped} 個異常點` : '');
   $('#trendTo').textContent = fmtTime(pts[pts.length - 1].t);
   showRead(pts[pts.length - 1], pts[0]);
   bindCursor(plot, pts, x, y);
+}
+
+/**
+ * 去尖峰。把「跟前後鄰居都差很多」的孤立點濾掉。
+ *
+ * 為什麼用鄰居而不是中位數：以整段資料的中位數當基準的話，
+ * 長期趨勢本身就會偏離中位數超過門檻，真實資料會被誤刪。
+ * 相鄰兩點只差 5 分鐘，正常情況下不可能跳 20%（台股單日上下限 10%），
+ * 所以偏離鄰居 20% 以上一定是收集失誤。
+ */
+function despike(pts) {
+  if (pts.length < 3) return { pts, dropped: 0 };
+  const ok = pts.filter((p, i) => {
+    const ref = i === 0 ? pts[1].v
+              : i === pts.length - 1 ? pts[pts.length - 2].v
+              : (pts[i - 1].v + pts[i + 1].v) / 2;
+    if (!(ref > 0)) return true;
+    return Math.abs(p.v - ref) / ref <= 0.2;
+  });
+  return ok.length >= 2 ? { pts: ok, dropped: pts.length - ok.length } : { pts, dropped: 0 };
 }
 
 function historyInRange() {
@@ -1155,15 +1176,21 @@ function bindCursor(plot, pts, x, y) {
 /** 把區間切成好看的刻度 */
 function niceScale(min, max) {
   if (max - min < 1e-9) { min -= Math.abs(min) * 0.005 || 1; max += Math.abs(max) * 0.005 || 1; }
-  const pad = (max - min) * 0.12;
+  // 留白 6%（原本 12%）。留太多會讓級距跳到下一個量級，資料就擠成一條線。
+  const pad = (max - min) * 0.06;
   min -= pad; max += pad;
-  const raw = (max - min) / 4;
-  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-  const step = [1, 2, 2.5, 5, 10].find(m => m * mag >= raw) * mag;
-  const lo = Math.floor(min / step) * step;
-  const hi = Math.ceil(max / step) * step;
-  const ticks = [];
-  for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v));
+
+  let step, lo, hi, ticks;
+  for (let n = 5; n >= 2; n--) {
+    const raw = (max - min) / n;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    step = ([1, 2, 2.5, 5, 10].find(m => m * mag >= raw) || 10) * mag;
+    lo = Math.floor(min / step) * step;
+    hi = Math.ceil(max / step) * step;
+    ticks = [];
+    for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v));
+    if (ticks.length <= 7) break;      // 太密就退一級
+  }
   return [lo, hi, ticks];
 }
 
@@ -1593,6 +1620,21 @@ $('#fileIn').onchange = async e => {
   } catch { showErr('匯入失敗', '檔案不是這個頁面匯出的 JSON 格式。'); }
   e.target.value = '';
 };
+$('#clearHistBtn').onclick = async () => {
+  if (!confirm('清除走勢紀錄？持倉與設定不受影響，走勢會從現在重新累積。')) return;
+  if (canWriteCloud()) {
+    try {
+      await fetch(kvURL() + '?only=history', { method:'DELETE', headers:{ 'X-PF-Token': cfg.token } });
+    } catch (e) {
+      showErr('清除雲端走勢失敗', e.message);
+    }
+  }
+  history = [];
+  store.del(K.hist);
+  paintSyncState();
+  renderTrend();
+};
+
 $('#clearBtn').onclick = async () => {
   const where = canWriteCloud() ? '雲端 KV 與這台裝置' : '這台裝置';
   if (!confirm(`刪掉 ${where} 上所有持倉與走勢紀錄？無法復原。`)) return;

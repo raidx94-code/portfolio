@@ -519,7 +519,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v26';
+const BUILD = 'v27';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -748,7 +748,8 @@ function compute() {
       state: q?.state || null,
       qtime: q?.time || null,
       qts: q?.qts || null,
-      value: null, cost: null, pnl: null, retPct: null, ok: price != null && (!isUS || !!fx)
+      value: null, cost: null, pnl: null, retPct: null,
+      ok: price != null && price > 0 && (!isUS || !!fx)
     };
     if (r.ok) {
       r.value = price * h.shares * rate;
@@ -1279,6 +1280,10 @@ function mergeQuotes(prev, fresh) {
   for (const side of ['tw', 'us']) {
     out[side] = { ...(fresh[side] || {}) };
     const old = prev?.[side] || {};
+    // 非正數的價格不是資料，是失誤。直接從新資料裡剔除。
+    for (const [code, n] of Object.entries(out[side])) {
+      if (!(n?.price > 0)) delete out[side][code];
+    }
     for (const [code, o] of Object.entries(old)) {
       const n = out[side][code];
       if (!n) { out[side][code] = o; continue; }          // 這次沒回，留舊的

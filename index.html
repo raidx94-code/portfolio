@@ -108,7 +108,8 @@
     display:flex; justify-content:space-between; gap:14px; margin-top:7px;
     font-family:var(--mono); font-size:10.5px; color:var(--dimmer);
   }
-  .trend-foot span:first-child{color:var(--amber); flex:1}
+  .trend-foot #trendNote{color:var(--amber); flex:1; text-align:center}
+  .trend-foot #trendFrom,.trend-foot #trendTo{white-space:nowrap}
   .feegrid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px}
   .feegrid label{margin-bottom:5px}
   .seg.small button{padding:5px 11px; font-size:11.5px}
@@ -362,7 +363,11 @@
         </div>
       </div>
       <div class="trend-plot" id="trendPlot"></div>
-      <div class="trend-foot"><span id="trendFrom"></span><span id="trendTo"></span></div>
+      <div class="trend-foot">
+        <span id="trendFrom"></span>
+        <span id="trendNote"></span>
+        <span id="trendTo"></span>
+      </div>
     </div>
   </section>
 
@@ -514,7 +519,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v25';
+const BUILD = 'v26';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -1129,36 +1134,61 @@ function renderTrend() {
   const lastPt = pts[pts.length - 1];
   const gap = (curValue && lastPt.v) ? lastPt.v - curValue : null;
   const warn = (gap != null && Math.abs(gap) / curValue > 0.05)
-    ? `　⚠ 最後記錄點與目前市值差 ${sgnNT(gap)}，該時點可能有持股沒抓到報價`
+    ? `⚠ 最後記錄點與目前市值差 ${sgnNT(gap)}，該時點可能有持股沒抓到報價`
     : '';
 
-  const excluded = holdings.length - (compute().all.length);
-  $('#trendFrom').textContent = fmtTime(pts[0].t)
-    + (dropped ? `　已濾除 ${dropped} 個異常點` : '')
-    + (excluded > 0 ? `　${excluded} 檔無報價未計入總市值` : '')
-    + warn;
+  const excluded = holdings.length - compute().all.length;
+  const notes = [];
+  if (dropped) notes.push(`已跳過 ${dropped} 個異常點（僅影響繪圖，原始資料保留）`);
+  if (excluded > 0) notes.push(`${excluded} 檔無報價未計入總市值`);
+  if (warn) notes.push(warn);
+
+  $('#trendFrom').textContent = fmtTime(pts[0].t);
+  $('#trendNote').textContent = notes.join('　·　');
   $('#trendTo').textContent = fmtTime(pts[pts.length - 1].t);
   showRead(pts[pts.length - 1], pts[0]);
   bindCursor(plot, pts, x, y);
 }
 
 /**
- * 去尖峰。把「跟前後鄰居都差很多」的孤立點濾掉。
+ * 去尖峰。濾掉「偏離前後水位、之後又回到原水位」的資料點。
  *
- * 為什麼用鄰居而不是中位數：以整段資料的中位數當基準的話，
- * 長期趨勢本身就會偏離中位數超過門檻，真實資料會被誤刪。
- * 相鄰兩點只差 5 分鐘，正常情況下不可能跳 20%（台股單日上下限 10%），
- * 所以偏離鄰居 20% 以上一定是收集失誤。
+ * 舊版只看單一點跟鄰居的關係，抓不到連續好幾點都錯的情況
+ * （收集器連續幾輪都少抓同一檔，圖上就是一段平的斷崖）。
+ * 改成偵測「異常段」：從偏離前一點超過 20% 開始，一直到回復為止，
+ * 只有當段落結束後**回到原本的水位**才判定為異常並整段跳過。
+ *
+ * 為什麼要求回到原水位：真實的下跌不會跌完又立刻跳回原點。
+ * 有這個條件，就不會把真正的行情變化誤判成雜訊。
  */
 function despike(pts) {
   if (pts.length < 3) return { pts, dropped: 0 };
-  const ok = pts.filter((p, i) => {
-    const ref = i === 0 ? pts[1].v
-              : i === pts.length - 1 ? pts[pts.length - 2].v
-              : (pts[i - 1].v + pts[i + 1].v) / 2;
-    if (!(ref > 0)) return true;
-    return Math.abs(p.v - ref) / ref <= 0.2;
-  });
+  const TOL = 0.2;
+  const MAX_RUN = 30;                 // 最長容許的異常段（5 分鐘一點約 2.5 小時）
+  const drop = new Set();
+
+  // 開頭那一點沒有前鄰居，單獨跟第二點比
+  if (pts[1].v > 0 && Math.abs(pts[0].v - pts[1].v) / pts[1].v > TOL) drop.add(0);
+
+  for (let i = 1; i < pts.length; i++) {
+    if (drop.has(i)) continue;
+    const before = pts[i - 1];
+    if (!(before.v > 0)) continue;
+    if (Math.abs(pts[i].v - before.v) / before.v <= TOL) continue;
+
+    let j = i;
+    while (j + 1 < pts.length
+           && Math.abs(pts[j + 1].v - before.v) / before.v > TOL
+           && j - i < MAX_RUN) j++;
+
+    const after = pts[j + 1];
+    if (after && Math.abs(after.v - before.v) / before.v <= TOL) {
+      for (let k = i; k <= j; k++) drop.add(k);
+    }
+    i = j;
+  }
+
+  const ok = pts.filter((_, i) => !drop.has(i));
   return ok.length >= 2 ? { pts: ok, dropped: pts.length - ok.length } : { pts, dropped: 0 };
 }
 

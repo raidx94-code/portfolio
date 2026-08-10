@@ -105,9 +105,10 @@
     padding:0 20px; line-height:1.8;
   }
   .trend-foot{
-    display:flex; justify-content:space-between; margin-top:7px;
+    display:flex; justify-content:space-between; gap:14px; margin-top:7px;
     font-family:var(--mono); font-size:10.5px; color:var(--dimmer);
   }
+  .trend-foot span:first-child{color:var(--amber); flex:1}
   .feegrid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px}
   .feegrid label{margin-bottom:5px}
   .seg.small button{padding:5px 11px; font-size:11.5px}
@@ -513,7 +514,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v23';
+const BUILD = 'v25';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -574,6 +575,10 @@ async function kvPut(payload) {
  * 使用者可能刻意不開同步。
  */
 let cloudWhy = '';   // 探測失敗的原因，顯示在設定面板
+let curValue = null; // 目前實算的總市值，用來跟走勢最後一點對照
+// 這次連線曾經抓到過報價的代號。停牌股永遠不會進來，
+// 所以不能拿「持股總數」當記錄走勢的門檻，否則停牌那天走勢就永久停擺。
+const everQuoted = new Set();
 
 async function probeCloud() {
   cloudWhy = '';
@@ -780,6 +785,9 @@ function render() {
   const retEl = $('#ret');
   retEl.className = 'v ' + dirClass(d.pnl);
   retEl.textContent = d.all.length ? pct(d.retPct) : '—';
+
+  // 記下現算市值，renderTrend 會拿它跟走勢最後一點比對
+  curValue = d.all.length ? d.value : null;
 
   renderMarket();
   renderStats(d);
@@ -1009,10 +1017,20 @@ function sparkHTML(r) {
 }
 
 /* ---------- 走勢 ---------- */
-function pushHistory(total) {
+function pushHistory(d) {
   // 雲端模式下走勢由 Cron 每 5 分鐘寫進 KV，瀏覽器不要重複記，
   // 否則兩份資料點會交錯，圖上出現鋸齒。
   if (kvOn()) return;
+
+  // 有任何一檔沒抓到報價就不要記。少一檔就少一份市值，
+  // 走勢圖上會變成一道假的斷崖 —— Cron 端早就有這個條件，這裡漏了。
+  // 門檻：曾經有報價的持股這次要全部都在。
+  // 暫時抓不到的由 mergeQuotes 沿用舊價，所以正常不會卡；
+  // 真正被排除的只有停牌或代號錯誤這種從頭到尾沒資料的標的。
+  const expect = holdings.filter(h => everQuoted.has(h.code)).length;
+  if (!d || !Array.isArray(d.all) || !expect || d.all.length < expect) return;
+
+  const total = d.value;
   if (!Number.isFinite(total) || total <= 0) return;
   const now = Date.now();
   const last = history[history.length - 1];
@@ -1106,7 +1124,19 @@ function renderTrend() {
     </g>
   </svg>`;
 
-  $('#trendFrom').textContent = fmtTime(pts[0].t) + (dropped ? `　已濾除 ${dropped} 個異常點` : '');
+  // 走勢是另一套資料（雲端模式下由 Cron 寫入）。跟現算市值差太多就講出來，
+  // 否則你只會看到一道莫名的斷崖，還以為是股價崩了。
+  const lastPt = pts[pts.length - 1];
+  const gap = (curValue && lastPt.v) ? lastPt.v - curValue : null;
+  const warn = (gap != null && Math.abs(gap) / curValue > 0.05)
+    ? `　⚠ 最後記錄點與目前市值差 ${sgnNT(gap)}，該時點可能有持股沒抓到報價`
+    : '';
+
+  const excluded = holdings.length - (compute().all.length);
+  $('#trendFrom').textContent = fmtTime(pts[0].t)
+    + (dropped ? `　已濾除 ${dropped} 個異常點` : '')
+    + (excluded > 0 ? `　${excluded} 檔無報價未計入總市值` : '')
+    + warn;
   $('#trendTo').textContent = fmtTime(pts[pts.length - 1].t);
   showRead(pts[pts.length - 1], pts[0]);
   bindCursor(plot, pts, x, y);
@@ -1265,10 +1295,15 @@ async function refresh() {
     const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) throw new Error('報價來源回應 HTTP ' + r.status);
     quotes = mergeQuotes(quotes, await r.json());
+    for (const side of ['tw', 'us']) {
+      for (const [code, q] of Object.entries(quotes[side] || {})) {
+        if (q?.price != null) everQuoted.add(code);
+      }
+    }
 
     const d = compute();
     if (d.all.length) {
-      pushHistory(d.value);
+      pushHistory(d);
        if (lastTotal != null) blip(d.pnl - lastTotal);
       lastTotal = d.pnl;
     }

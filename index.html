@@ -146,34 +146,10 @@
   .stat .v{font-family:var(--mono); font-size:19px; font-weight:500; margin-top:5px; font-variant-numeric:tabular-nums}
   .stat .s{font-size:11.5px; color:var(--dimmer); font-family:var(--mono); margin-top:2px}
 
-  /* ---------- 表格 ---------- */
-  .book{margin-top:42px}
-  .book-head{display:flex; align-items:baseline; gap:12px; margin-bottom:12px}
-  .book-head .eyebrow{margin-left:auto}
-  .tscroll{overflow-x:auto; margin:0 calc(var(--pad) * -1); padding:0 var(--pad)}
-  table{width:100%; border-collapse:collapse; min-width:640px}
-  th{
-    font-family:var(--mono); font-size:10.5px; font-weight:500; letter-spacing:.1em;
-    text-transform:uppercase; color:var(--dim); text-align:right;
-    padding:9px 10px; border-bottom:1px solid var(--rule); white-space:nowrap;
-  }
-  th:first-child,td:first-child{text-align:left; padding-left:0}
-  th:last-child,td:last-child{padding-right:0}
-  td{
-    padding:11px 10px; text-align:right; border-bottom:1px solid var(--rule-soft);
-    font-family:var(--mono); font-size:13.5px; font-variant-numeric:tabular-nums;
-    white-space:nowrap;
-  }
-  tbody tr:hover td{background:#ffffff05}
-  .code{font-weight:600; letter-spacing:.03em}
-  .cname{font-family:var(--sans); font-size:11.5px; color:var(--dim); margin-left:8px; letter-spacing:0}
-  tfoot td{border-bottom:0; border-top:1px solid var(--rule); font-weight:600; color:var(--ivory); padding-top:13px}
-  tfoot td:first-child{font-family:var(--serif)}
   .chip{
     display:inline-block; font-size:9.5px; padding:1px 5px; border:1px solid var(--rule);
     border-radius:2px; color:var(--dim); margin-left:8px; letter-spacing:.08em;
   }
-  .chip.bad{border-color:var(--amber); color:var(--amber-hi)}
 
   /* ---------- 個股卡片 ---------- */
   .subtotal{
@@ -519,7 +495,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v27';
+const BUILD = 'v29';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -542,7 +518,9 @@ let cfg = Object.assign(
     soundMin:1000, fee:{ on:true, buyIncluded:true, disc:1, min:20 } },
   store.get(K.cfg, {})
 );
-let history = store.get(K.hist, []);
+// 名稱刻意不叫 history —— 那會遮蔽 window.history，
+// 之前 loadFromHash() 就是因此在 replaceState 崩掉。
+let hist = store.get(K.hist, []);
 let quotes = null, timer = null, lastTotal = null;
 
 const $ = s => document.querySelector(s);
@@ -580,7 +558,14 @@ async function kvPut(payload) {
  * 使用者可能刻意不開同步。
  */
 let cloudWhy = '';   // 探測失敗的原因，顯示在設定面板
-let curValue = null; // 目前實算的總市值，用來跟走勢最後一點對照
+// 上次拿分時走勢的時間。5 分 K 五分鐘才變一次，用 60 秒的頻率去拿是白拿，
+// 而且會讓 Worker 對每一檔台股都打一次 Yahoo。中間的刷新由 mergeQuotes
+// 保留舊序列，畫面不會閃。
+let lastChartAt = 0;
+const CHART_EVERY = 4.5 * 60 * 1000;
+
+let lastD = null;    // 最近一次 compute() 的結果。renderTrend 需要它，
+                     // 但不該為了拿一個數字就整個重算一遍。
 // 這次連線曾經抓到過報價的代號。停牌股永遠不會進來，
 // 所以不能拿「持股總數」當記錄走勢的門檻，否則停牌那天走勢就永久停擺。
 const everQuoted = new Set();
@@ -607,22 +592,22 @@ async function syncFromCloud() {
     // 雲端是空的、本機卻有資料 → 絕對不要蓋掉。
     // 這種情況通常是還沒把持倉推上 KV，若照蓋就會直接弄丟本機資料。
     if (!cloudHold.length && holdings.length) {
-      history = j.history || history;
-      store.set(K.hist, history);
+      hist = j.history || hist;
+      store.set(K.hist, hist);
       showErr('雲端上還沒有持倉',
         `這台裝置有 ${holdings.length} 筆，已保留不覆蓋。到「設定」按一次「儲存並更新」就會推上雲端，其他裝置才看得到。`);
       return true;
     }
 
     holdings = cloudHold;
-    history = j.history || [];
+    hist = j.history || [];
     // 顏色與更新間隔跟著雲端走，但密鑰和網址永遠留在本機
     if (j.config && typeof j.config === 'object') {
       const { url: _u, token: _t, ...rest } = j.config;
       Object.assign(cfg, rest);
     }
     store.set(K.hold, holdings);
-    store.set(K.hist, history);
+    store.set(K.hist, hist);
     store.set(K.cfg, cfg);
     return true;
   } catch (e) {
@@ -650,16 +635,6 @@ function dirClass(n) {
   const rise = n > 0;
   if (cfg.colors === 'tw') return rise ? 'up' : 'down';
   return rise ? 'down' : 'up';
-}
-function dirColor(n, strength) {
-  const t = Math.min(Math.abs(strength) / 15, 1);
-  const base = [42, 49, 64];
-  const rise = n > 0;
-  const hot = cfg.colors === 'tw'
-    ? (rise ? [255,110,96] : [86,227,155])
-    : (rise ? [86,227,155] : [255,110,96]);
-  const mix = base.map((b, i) => Math.round(b + (hot[i] - b) * (0.22 + 0.78 * t)));
-  return `rgb(${mix.join(',')})`;
 }
 
 /* ---------- 費用試算 ---------- */
@@ -778,8 +753,9 @@ function compute() {
 }
 
 /* ---------- 畫面 ---------- */
-function render() {
-  const d = compute();
+function render(precomputed) {
+  const d = precomputed || compute();
+  lastD = d;
 
   if (!holdings.length) return renderEmpty();
 
@@ -791,9 +767,6 @@ function render() {
   const retEl = $('#ret');
   retEl.className = 'v ' + dirClass(d.pnl);
   retEl.textContent = d.all.length ? pct(d.retPct) : '—';
-
-  // 記下現算市值，renderTrend 會拿它跟走勢最後一點比對
-  curValue = d.all.length ? d.value : null;
 
   renderMarket();
   renderStats(d);
@@ -1039,12 +1012,12 @@ function pushHistory(d) {
   const total = d.value;
   if (!Number.isFinite(total) || total <= 0) return;
   const now = Date.now();
-  const last = history[history.length - 1];
+  const last = hist[hist.length - 1];
   // 兩分鐘內算同一點，直接覆蓋，避免 15 秒更新時塞爆
   if (last && now - last.t < 2 * 60 * 1000) { last.t = now; last.v = total; }
-  else history.push({ t: now, v: total });
-  if (history.length > 4000) history = compactHistory(history);
-  store.set(K.hist, history);
+  else hist.push({ t: now, v: total });
+  if (hist.length > 4000) hist = compactHistory(hist);
+  store.set(K.hist, hist);
 }
 
 /** 最近 1500 點保留完整解析度，更舊的每兩點取一點 */
@@ -1063,7 +1036,7 @@ function renderTrend() {
 
   if (pts.length < 2) {
     plot.innerHTML = `<div class="trend-empty">
-      走勢要靠這個頁面開著才會累積。<br>目前只有 ${history.length} 個資料點，再等幾分鐘就會出現。
+      走勢要靠這個頁面開著才會累積。<br>目前只有 ${hist.length} 個資料點，再等幾分鐘就會出現。
     </div>`;
     $('#trendRead').textContent = '—';
     $('#trendFrom').textContent = '';
@@ -1132,13 +1105,15 @@ function renderTrend() {
 
   // 走勢是另一套資料（雲端模式下由 Cron 寫入）。跟現算市值差太多就講出來，
   // 否則你只會看到一道莫名的斷崖，還以為是股價崩了。
+  // quotes 還沒回來時 lastD 是空的，這時不要下任何結論
+  const curValue = (lastD && lastD.all.length) ? lastD.value : null;
   const lastPt = pts[pts.length - 1];
   const gap = (curValue && lastPt.v) ? lastPt.v - curValue : null;
   const warn = (gap != null && Math.abs(gap) / curValue > 0.05)
     ? `⚠ 最後記錄點與目前市值差 ${sgnNT(gap)}，該時點可能有持股沒抓到報價`
     : '';
 
-  const excluded = holdings.length - compute().all.length;
+  const excluded = (lastD && lastD.all.length) ? holdings.length - lastD.all.length : 0;
   const notes = [];
   if (dropped) notes.push(`已跳過 ${dropped} 個異常點（僅影響繪圖，原始資料保留）`);
   if (excluded > 0) notes.push(`${excluded} 檔無報價未計入總市值`);
@@ -1195,10 +1170,10 @@ function despike(pts) {
 
 function historyInRange() {
   const now = Date.now();
-  if (cfg.range === 'a') return history.slice();
-  if (cfg.range === 'w') return history.filter(p => now - p.t <= 7 * 864e5);
+  if (cfg.range === 'a') return hist.slice();
+  if (cfg.range === 'w') return hist.filter(p => now - p.t <= 7 * 864e5);
   const d0 = new Date(); d0.setHours(0, 0, 0, 0);
-  return history.filter(p => p.t >= d0.getTime());
+  return hist.filter(p => p.t >= d0.getTime());
 }
 
 function showRead(p, first) {
@@ -1302,7 +1277,9 @@ function mergeQuotes(prev, fresh) {
   out.idx = { ...(prev?.idx || {}) };
   for (const [k, n] of Object.entries(fresh.idx || {})) {
     const o = out.idx[k];
-    if (!o || !(o.qts > (n.qts || 0))) out.idx[k] = n;
+    if (o && o.qts > (n.qts || 0)) continue;                  // 舊的比較新，留著
+    // 這次沒帶序列（nochart）時沿用舊的，否則大盤走勢線會消失
+    out.idx[k] = (!n.series?.length && o?.series?.length) ? { ...n, series: o.series } : n;
   }
   return out;
 }
@@ -1324,12 +1301,16 @@ async function refresh() {
   setStatus('warn', '更新中…');
   const tw = holdings.filter(h => h.market !== 'us').map(h => `${h.market}_${h.code}`);
   const us = holdings.filter(h => h.market === 'us').map(h => h.code);
-  const url = cfg.url.replace(/\/+$/, '') + `/?tw=${encodeURIComponent(tw.join(','))}&us=${encodeURIComponent(us.join(','))}`;
+  const wantChart = Date.now() - lastChartAt >= CHART_EVERY;
+  const url = cfg.url.replace(/\/+$/, '')
+    + `/?tw=${encodeURIComponent(tw.join(','))}&us=${encodeURIComponent(us.join(','))}`
+    + (wantChart ? '' : '&nochart=1');
 
   try {
     const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) throw new Error('報價來源回應 HTTP ' + r.status);
     quotes = mergeQuotes(quotes, await r.json());
+    if (wantChart) lastChartAt = Date.now();
     for (const side of ['tw', 'us']) {
       for (const [code, q] of Object.entries(quotes[side] || {})) {
         if (q?.price != null) everQuoted.add(code);
@@ -1339,10 +1320,10 @@ async function refresh() {
     const d = compute();
     if (d.all.length) {
       pushHistory(d);
-       if (lastTotal != null) blip(d.pnl - lastTotal);
+      if (lastTotal != null) blip(d.pnl - lastTotal);
       lastTotal = d.pnl;
     }
-    render();
+    render(d);
 
     const t = new Date();
     const hhmmss = t.toTimeString().slice(0, 8);
@@ -1412,7 +1393,7 @@ function openPanel() {
 function paintSyncState() {
   const el2 = $('#syncState');
   if (!el2) return;
-  const n = history.length;
+  const n = hist.length;
   el2.textContent =
     cloudMode === 'rw' ? `目前：雲端同步中，可讀可寫，${n} 個走勢資料點在 KV。`
   : cloudMode === 'ro' ? `目前：雲端唯讀。這台裝置沒有密鑰，改持倉要填密鑰或到有密鑰的裝置上改。${n} 個走勢資料點。`
@@ -1629,7 +1610,8 @@ function loadFromHash() {
   const m = /[#&]d=([A-Za-z0-9\-_]+)/.exec(location.hash);
   if (!m) return false;
   // 不管成不成功都把 hash 清掉，避免重整又跑一次
-  history.replaceState(null, '', location.pathname + location.search);
+  // 這裡一定要寫 window.history —— 這個 IIFE 裡的 hist 是走勢陣列
+  window.history.replaceState(null, '', location.pathname + location.search);
   try {
     const j = JSON.parse(b64u.dec(m[1]));
     if (!j.config) throw new Error('格式不對');
@@ -1699,7 +1681,7 @@ $('#clearHistBtn').onclick = async () => {
       showErr('清除雲端走勢失敗', e.message);
     }
   }
-  history = [];
+  hist = [];
   store.del(K.hist);
   paintSyncState();
   renderTrend();
@@ -1715,7 +1697,7 @@ $('#clearBtn').onclick = async () => {
       showErr('清除雲端失敗', e.message);
     }
   }
-  holdings = []; history = [];
+  holdings = []; hist = [];
   store.del(K.hold); store.del(K.hist);
   drawRows(); closePanel(); render();
 };

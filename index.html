@@ -112,6 +112,13 @@
   .trend-foot #trendFrom,.trend-foot #trendTo{white-space:nowrap}
   .feegrid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px}
   .feegrid label{margin-bottom:5px}
+  .diag{
+    margin:10px 0 0; padding:11px 12px; max-height:260px; overflow:auto;
+    background:var(--ink); border:1px solid var(--rule); border-radius:2px;
+    font-family:var(--mono); font-size:11px; line-height:1.65; color:var(--ivory);
+    white-space:pre-wrap; word-break:break-all;
+  }
+  .diag b{color:var(--amber-hi); font-weight:500}
   .seg.small button{padding:5px 11px; font-size:11.5px}
   .seg.small{flex:none}
 
@@ -467,6 +474,16 @@
       </div>
       <input type="file" id="fileIn" accept=".json,application/json" hidden>
     </div>
+
+    <div class="field">
+      <label>收集器診斷</label>
+      <button class="btn" id="diagBtn">檢查為什麼走勢沒更新</button>
+      <div class="hint">
+        直接跑一次背景收集器的判斷流程（只計算、不寫入任何資料），
+        告訴你它會不會記錄、被哪一關擋住、是哪幾檔缺報價。
+      </div>
+      <pre class="diag" id="diagOut" hidden></pre>
+    </div>
   </div>
   <div class="panel-foot">
     <button class="btn solid" id="saveBtn">儲存並更新</button>
@@ -495,7 +512,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v30';
+const BUILD = 'v31';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -1655,6 +1672,40 @@ $('#linkBtn').onclick = async () => {
   } catch {
     // 沒有剪貼簿權限就讓使用者自己複製
     prompt('自行複製這段網址：', link);
+  }
+};
+
+$('#diagBtn').onclick = async () => {
+  const out = $('#diagOut');
+  const btn = $('#diagBtn');
+  out.hidden = false;
+  out.textContent = '查詢中…';
+  btn.disabled = true;
+  try {
+    const h = {};
+    const tok = $('#token').value.trim() || cfg.token;
+    if (tok) h['X-PF-Token'] = tok;
+    const base = ($('#workerUrl').value.trim() || cfg.url).replace(/\/+$/, '');
+    const r = await fetch(base + '/collect', { headers: h, cache: 'no-store' });
+    const j = await r.json();
+
+    // 先給一句人話的結論，再附完整回傳
+    let head;
+    if (r.status === 401) {
+      head = '需要同步密鑰才能診斷（Worker 的 PUBLIC_READ 是 false）。';
+    } else if (j.ok) {
+      head = `收集器正常。這一輪會記錄 NT$${twd(j.point?.v || 0)}`
+        + `（${j.point?.n || 0} 檔，其中 ${j.point?.s || 0} 檔沿用舊價）。\n`
+        + `結論：收集邏輯沒問題，走勢有空隙就是 Cron 沒被觸發 ——\n`
+        + `到 Cloudflare 的 Observability 頁籤篩 scheduled 事件看有沒有紀錄。`;
+    } else {
+      head = `收集器會跳過這一輪。\n原因：${j.reason || j.error || '未知'}`;
+    }
+    out.textContent = head + '\n\n──── 完整回傳 ────\n' + JSON.stringify(j, null, 2);
+  } catch (e) {
+    out.textContent = '連不上 Worker：' + e.message;
+  } finally {
+    btn.disabled = false;
   }
 };
 

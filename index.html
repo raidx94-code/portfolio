@@ -495,7 +495,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v29';
+const BUILD = 'v30';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -1080,6 +1080,7 @@ function renderTrend() {
     }
   });
 
+  const wan = wanFmt(ticks.length > 1 ? ticks[1] - ticks[0] : hi - lo);
   const grid = ticks.map(v => `
     <line class="grid" x1="${padL}" y1="${y(v).toFixed(1)}" x2="${(W - padR + 4).toFixed(1)}" y2="${y(v).toFixed(1)}"/>
     <text class="ylab" x="${(W - padR + 46).toFixed(1)}" y="${(y(v) + 3.5).toFixed(1)}">${wan(v)}</text>`).join('');
@@ -1230,9 +1231,17 @@ function niceScale(min, max) {
   return [lo, hi, ticks];
 }
 
-const wan = v => Math.abs(v) >= 1e4
-  ? nf0.format(Math.round(v / 1e4 * 10) / 10) + ' 萬'
-  : nf0.format(Math.round(v));
+/**
+ * 刻度標籤。小數位數要由刻度間距決定 ——
+ * 舊版先算到小數一位再用 nf0（0 位小數）格式化，精度直接被丟掉，
+ * 於是區間很窄時五條刻度全部顯示成同一個數字。
+ * 條件是相鄰刻度必須看得出差異：10^-d ≤ (step/1e4)/2
+ */
+function wanFmt(step) {
+  const d = Math.max(0, Math.min(3, Math.ceil(Math.log10(2e4 / Math.max(step, 1)))));
+  const f = new Intl.NumberFormat('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: d });
+  return v => f.format(v / 1e4) + ' 萬';
+}
 
 function fmtTime(t) {
   const d = new Date(t);

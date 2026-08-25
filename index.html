@@ -512,7 +512,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v31';
+const BUILD = 'v32';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -1325,7 +1325,10 @@ async function refresh() {
   if (!holdings.length) { setStatus('warn', '沒有持倉'); render(); return; }
 
   setStatus('warn', '更新中…');
-  const tw = holdings.filter(h => h.market !== 'us').map(h => `${h.market}_${h.code}`);
+  // market 缺值時補 tse。舊版沒有這層，匯入的 JSON 少了 market 欄位就會
+  // 送出 "undefined_2330"，證交所和 Yahoo 兩邊都查不到而顯示查無報價。
+  // Cron 端本來就有 `h.market || 'tse'`，這裡漏了。
+  const tw = holdings.filter(h => h.market !== 'us').map(h => `${h.market || 'tse'}_${h.code}`);
   const us = holdings.filter(h => h.market === 'us').map(h => h.code);
   const wantChart = Date.now() - lastChartAt >= CHART_EVERY;
   const url = cfg.url.replace(/\/+$/, '')
@@ -1538,6 +1541,10 @@ async function save() {
     holdings = rows;
     store.set(K.hold, holdings);
   }
+
+  // 持倉變了，損益基準也跟著變。不重設的話下一次刷新會把
+  // 「新增一檔造成的跳動」當成行情波動，觸發三連音。
+  lastTotal = null;
 
   closePanel();
   schedule();

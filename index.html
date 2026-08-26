@@ -135,6 +135,7 @@
     color:var(--dim); text-transform:uppercase; display:flex; gap:6px; align-items:baseline;
   }
   .mk .k .tag{margin-left:auto; color:var(--dimmer); letter-spacing:.06em}
+  .mk .k .tag.lag{color:var(--amber-hi)}
   .mk .v{
     font-family:var(--mono); font-size:22px; font-weight:600; margin-top:6px;
     font-variant-numeric:tabular-nums; letter-spacing:-.01em;
@@ -207,6 +208,7 @@
     column-gap:8px; row-gap:2px;
   }
   .card-day .qt{margin-left:auto; color:var(--dimmer); font-size:10.5px; white-space:nowrap}
+  .card-day .qt.lag{color:var(--amber-hi)}
   .spark{margin:12px -3px 0}
   .spark svg{width:100%; height:52px; display:block}
   .spark-empty{
@@ -512,7 +514,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v32';
+const BUILD = 'v36';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -677,6 +679,27 @@ function feesFor(r) {
   return Math.floor(buy) + Math.floor(sell) + Math.floor(r.value * taxRate);
 }
 
+/**
+ * 台股一般交易時段 09:00–13:30（台北時間）。
+ * 用 UTC 位移計算，不受瀏覽器時區設定影響。
+ *
+ * 為什麼不直接用報價裡的 state：那是抓到那筆報價「當時」的狀態。
+ * 證交所斷線時畫面會沿用舊報價，於是 08:51 抓到的「收盤」標籤
+ * 會一直掛在那裡，明明市場早就開了。
+ */
+function twOpen() {
+  const tpe = new Date(Date.now() + 8 * 3600e3);
+  const d = tpe.getUTCDay();
+  if (d === 0 || d === 6) return false;
+  const m = tpe.getUTCHours() * 60 + tpe.getUTCMinutes();
+  return m >= 540 && m <= 810;
+}
+
+/** 這筆報價落後多少分鐘。null 代表沒有時間戳可比。 */
+function staleMin(qts) {
+  return qts ? Math.floor((Date.now() - qts) / 60000) : null;
+}
+
 /* ---------- 台股漲跌停 ---------- */
 /**
  * 台股升降單位（股票）。漲停價是「昨收×1.1 往下取到合法檔位」，
@@ -826,8 +849,10 @@ function renderMarket() {
     const p = q.prev ? diff / q.prev * 100 : null;
     const cls = dirClass(diff);
     const t = (q.time || (q.qts ? new Date(q.qts).toTimeString() : '')).slice(0, 5);
+    const lm = staleMin(q.qts);
+    const lag = twOpen() && lm != null && lm >= 3;
     cells.push(`<div class="mk">
-      <div class="k">${label}<span class="tag">${q.src === 'twse' ? '證交所' : 'Yahoo'} ${t}</span></div>
+      <div class="k">${label}<span class="tag${lag ? ' lag' : ''}">${q.src === 'twse' ? '證交所' : 'Yahoo'} ${t}${lag ? `　延遲 ${lm} 分` : ''}</span></div>
       <div class="v ${cls}">${nf2.format(q.price)}</div>
       <div class="d ${cls}">${diff == null ? '—' : (diff > 0 ? '+' : diff < 0 ? '−' : '') + nf2.format(Math.abs(diff)) + '　' + pct(p)}</div>
       ${key === 't00' ? miniSpark(q, cls) : ''}
@@ -932,7 +957,12 @@ function cardHTML(r, isUS) {
   const srcLabel = r.src === 'twse' ? '證交所' : 'Yahoo';
   // 美股盤中是台灣時間 21:30–04:00。台灣白天打開時 Yahoo 回的是前一盤，
   // 這時候標「今日」會誤導，所以一律寫「較昨收」，並在收盤時掛一個標籤。
-  const closed = r.state && r.state !== 'REGULAR';
+  const isTW = r.market !== 'us';
+  // 台股盤別由本地時鐘算，不用報價裡的（那是抓到時的狀態，會跟著舊報價卡住）
+  const closed = isTW ? !twOpen() : (r.state && r.state !== 'REGULAR');
+  const lagM = staleMin(r.qts);
+  // 只在該市場開著的時候才算「延遲」—— 收盤後報價不動是正常的
+  const laggy = !closed && lagM != null && lagM >= 3;
   // 報價本身的時間。跟右上「已更新」的差距就是資料源延遲多久。
   const qt = r.qtime || (r.qts ? new Date(r.qts).toTimeString().slice(0, 8) : null);
   const cap = limitState(r);
@@ -953,7 +983,9 @@ function cardHTML(r, isUS) {
     <div class="card-price">${nf2.format(r.price)}<span class="unit">${cur}</span>${
       dayDiff == null ? '' : `<span class="chg ${dc}">${sgn2(dayDiff)}</span>`
     }</div>
-    <div class="card-day ${dc}">${r.dayPct == null ? '較昨收 —' : '較昨收 ' + pct(r.dayPct)}<span class="qt">${qt ? '報價 ' + qt : ''}</span></div>
+    <div class="card-day ${dc}">${r.dayPct == null ? '較昨收 —' : '較昨收 ' + pct(r.dayPct)}<span class="qt${laggy ? ' lag' : ''}">${
+      qt ? '報價 ' + qt + (laggy ? `　延遲 ${lagM} 分` : '') : ''
+    }</span></div>
 
     ${sparkHTML(r)}
 
@@ -1290,7 +1322,12 @@ function mergeQuotes(prev, fresh) {
       if (!n) { out[side][code] = o; continue; }          // 這次沒回，留舊的
       const nt = n.qts || 0, ot = o.qts || 0;
       if (ot > nt) {
-        // 舊的比較新 —— 保留它，但走勢序列取有內容的那份
+        // 單純比時間戳：手上的比較新就留著，避免報價往回跳。
+        //
+        // 不需要「卡太久就讓位」那種例外，也不需要判斷跨交易日：
+        //   · 凍結會自己解除 —— 備援來源的時鐘一直在往前走，
+        //     一旦超過手上這筆就自動接手，凍結時長約等於它的延遲幅度。
+        //   · 昨天的收盤時間戳本來就比今天的舊，純比較自然就擋掉了。
         out[side][code] = { ...o, series: (n.series?.length ? n.series : o.series) || [] };
       } else if (!n.series?.length && o.series?.length) {
         out[side][code] = { ...n, series: o.series };
@@ -1354,9 +1391,26 @@ async function refresh() {
     }
     render(d);
 
-    const t = new Date();
-    const hhmmss = t.toTimeString().slice(0, 8);
-    if (quotes.errors?.length) {
+    const hhmmss = new Date().toTimeString().slice(0, 8);
+
+    // 「已更新 09:03」講的是我去抓的時間，不是資料的時間。
+    // 來源斷線時畫面會沿用舊報價，那樣看起來像在更新其實是凍結的。
+    // 所以盤中改成報告最舊的那筆落後多久。
+    let worstLag = null;
+    if (twOpen()) {
+      for (const r of d.rows.tw) {
+        if (!r.ok) continue;
+        const m = staleMin(r.qts);
+        if (m != null && (worstLag == null || m > worstLag)) worstLag = m;
+      }
+    }
+
+    if (worstLag != null && worstLag >= 3) {
+      setStatus('warn', `報價延遲 ${worstLag} 分 · 抓取於 ${hhmmss}`);
+      showErr('報價停在較早的時間',
+        `來源沒有更新，畫面沿用最後一次成功抓到的價格（避免退回更舊的備援資料）。`
+        + (quotes.errors?.length ? '　' + quotes.errors.join('；') : ''));
+    } else if (quotes.errors?.length) {
       setStatus('warn', '部分沒抓到 · ' + hhmmss);
       showErr('有些代號沒回報價', quotes.errors.join('；'));
     } else {

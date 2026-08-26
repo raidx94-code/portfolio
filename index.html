@@ -514,7 +514,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v36';
+const BUILD = 'v37';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -852,7 +852,7 @@ function renderMarket() {
     const lm = staleMin(q.qts);
     const lag = twOpen() && lm != null && lm >= 3;
     cells.push(`<div class="mk">
-      <div class="k">${label}<span class="tag${lag ? ' lag' : ''}">${q.src === 'twse' ? '證交所' : 'Yahoo'} ${t}${lag ? `　延遲 ${lm} 分` : ''}</span></div>
+      <div class="k">${label}<span class="tag${lag ? ' lag' : ''}">${q.src === 'twse' ? '證交所' : 'Yahoo'} ${t}</span></div>
       <div class="v ${cls}">${nf2.format(q.price)}</div>
       <div class="d ${cls}">${diff == null ? '—' : (diff > 0 ? '+' : diff < 0 ? '−' : '') + nf2.format(Math.abs(diff)) + '　' + pct(p)}</div>
       ${key === 't00' ? miniSpark(q, cls) : ''}
@@ -960,8 +960,10 @@ function cardHTML(r, isUS) {
   const isTW = r.market !== 'us';
   // 台股盤別由本地時鐘算，不用報價裡的（那是抓到時的狀態，會跟著舊報價卡住）
   const closed = isTW ? !twOpen() : (r.state && r.state !== 'REGULAR');
+  // 落後超過 3 分鐘就把報價時間染成琥珀色。不寫出分鐘數 ——
+  // 時間本身就看得出來，13 張卡片各印一次反而是雜訊。
+  // 收盤後報價不動是正常的，所以只在盤中判斷。
   const lagM = staleMin(r.qts);
-  // 只在該市場開著的時候才算「延遲」—— 收盤後報價不動是正常的
   const laggy = !closed && lagM != null && lagM >= 3;
   // 報價本身的時間。跟右上「已更新」的差距就是資料源延遲多久。
   const qt = r.qtime || (r.qts ? new Date(r.qts).toTimeString().slice(0, 8) : null);
@@ -983,9 +985,7 @@ function cardHTML(r, isUS) {
     <div class="card-price">${nf2.format(r.price)}<span class="unit">${cur}</span>${
       dayDiff == null ? '' : `<span class="chg ${dc}">${sgn2(dayDiff)}</span>`
     }</div>
-    <div class="card-day ${dc}">${r.dayPct == null ? '較昨收 —' : '較昨收 ' + pct(r.dayPct)}<span class="qt${laggy ? ' lag' : ''}">${
-      qt ? '報價 ' + qt + (laggy ? `　延遲 ${lagM} 分` : '') : ''
-    }</span></div>
+    <div class="card-day ${dc}">${r.dayPct == null ? '較昨收 —' : '較昨收 ' + pct(r.dayPct)}<span class="qt${laggy ? ' lag' : ''}">${qt ? '報價 ' + qt : ''}</span></div>
 
     ${sparkHTML(r)}
 

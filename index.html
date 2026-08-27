@@ -514,7 +514,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v40';
+const BUILD = 'v41';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -732,6 +732,31 @@ function usOpen(ms = Date.now()) {
   return m >= 570 && m < 960;
 }
 
+/** 這個時間戳是不是今天（台北）*/
+function isTpeToday(ms) {
+  const a = new Date(ms + 8 * 3600e3), b = new Date(Date.now() + 8 * 3600e3);
+  return a.getUTCFullYear() === b.getUTCFullYear()
+    && a.getUTCMonth() === b.getUTCMonth()
+    && a.getUTCDate() === b.getUTCDate();
+}
+
+/**
+ * 報價時間。不是今天的資料就把日期一起寫出來。
+ *
+ * 只印「13:30:04」的話，昨天的收盤價看起來會像今天的收盤價 ——
+ * 而且旁邊的「較昨收 +1.44%」其實是昨天的漲跌幅。
+ * 這是整個介面最容易誤判的一種呈現，寧可佔多幾個字。
+ */
+function fmtStamp(qts, qtime) {
+  if (!qts) return qtime || null;
+  const p = n => String(n).padStart(2, '0');
+  const d = new Date(qts + 8 * 3600e3);
+  if (isTpeToday(qts)) {
+    return qtime || `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  }
+  return `${p(d.getUTCMonth() + 1)}/${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+
 /** 這筆報價落後多少分鐘。null 代表沒有時間戳可比。 */
 function staleMin(qts) {
   return qts ? Math.floor((Date.now() - qts) / 60000) : null;
@@ -885,7 +910,7 @@ function renderMarket() {
     const diff = q.prev ? q.price - q.prev : null;
     const p = q.prev ? diff / q.prev * 100 : null;
     const cls = dirClass(diff);
-    const t = (q.time || (q.qts ? new Date(q.qts).toTimeString() : '')).slice(0, 5);
+    const t = fmtStamp(q.qts, q.time) || '';
     const lm = staleMin(q.qts);
     const lag = twActive() && lm != null && lm >= 3;
     cells.push(`<div class="mk">
@@ -1011,7 +1036,7 @@ function cardHTML(r, isUS) {
   const lagM = staleMin(r.qts);
   const laggy = phase !== 'closed' && lagM != null && lagM >= 3;
   // 報價本身的時間。跟右上「已更新」的差距就是資料源延遲多久。
-  const qt = r.qtime || (r.qts ? new Date(r.qts).toTimeString().slice(0, 8) : null);
+  const qt = fmtStamp(r.qts, r.qtime);
   const cap = limitState(r);
   const capCls = cap ? 'cap-' + dirClass(cap === 'up' ? 1 : -1) : '';
   const capTag = cap === 'up' ? '漲停' : cap === 'down' ? '跌停' : '';
@@ -1452,7 +1477,19 @@ async function refresh() {
 
     // 延遲的事實由狀態列和卡片上的報價時間表達，錯誤列只放來源回報的原因。
     // 解釋性的長句每次刷新都出現一次，反而擠掉真正的訊息。
-    if (worstLag != null && worstLag >= 3) {
+    // 落後到跨日就不要用「幾分鐘」表達，那個數字大到沒有意義
+    let oldDay = null;
+    for (const r of d.rows.tw) {
+      if (r.ok && r.qts && !isTpeToday(r.qts)) { oldDay = r.qts; break; }
+    }
+
+    if (oldDay) {
+      const dd = new Date(oldDay + 8 * 3600e3);
+      const p = n => String(n).padStart(2, '0');
+      setStatus('err', `報價仍是 ${p(dd.getUTCMonth() + 1)}/${p(dd.getUTCDate())} 的資料`);
+      if (quotes.errors?.length) showErr('有些代號沒回報價', quotes.errors.join('；'));
+      else showErr(null);
+    } else if (worstLag != null && worstLag >= 3) {
       setStatus('warn', `報價延遲 ${worstLag} 分 · 抓取於 ${hhmmss}`);
       if (quotes.errors?.length) showErr('有些代號沒回報價', quotes.errors.join('；'));
       else showErr(null);

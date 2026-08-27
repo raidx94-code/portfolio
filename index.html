@@ -514,7 +514,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v37';
+const BUILD = 'v39';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -687,12 +687,49 @@ function feesFor(r) {
  * 證交所斷線時畫面會沿用舊報價，於是 08:51 抓到的「收盤」標籤
  * 會一直掛在那裡，明明市場早就開了。
  */
-function twOpen() {
-  const tpe = new Date(Date.now() + 8 * 3600e3);
+function twPhase(ms = Date.now()) {
+  const tpe = new Date(ms + 8 * 3600e3);
   const d = tpe.getUTCDay();
-  if (d === 0 || d === 6) return false;
+  if (d === 0 || d === 6) return 'closed';
   const m = tpe.getUTCHours() * 60 + tpe.getUTCMinutes();
-  return m >= 540 && m <= 810;
+  if (m >= 510 && m < 540) return 'pre';      // 08:30–09:00 盤前試撮
+  if (m >= 540 && m <= 810) return 'open';    // 09:00–13:30 一般交易
+  return 'closed';
+}
+
+/** 一般交易時段 */
+function twOpen(ms) { return twPhase(ms) === 'open'; }
+
+/**
+ * 資料「應該在動」的時段，用來判斷報價是不是落後。
+ * 試撮期間 MIS 持續更新，所以也算在內 —— 舊版把試撮當收盤，
+ * 那段時間報價停住不會被標示出來。
+ */
+function twActive(ms) { return twPhase(ms) !== 'closed'; }
+
+/**
+ * 美東時區偏移（小時）。夏令 UTC−4、其餘 UTC−5。
+ * 夏令規則：三月第二個週日 02:00 起，十一月第一個週日 02:00 止。
+ * 這就是為什麼美股收盤在台灣時間夏天是 04:00、冬天是 05:00。
+ */
+function usEastOffset(ms) {
+  const y = new Date(ms).getUTCFullYear();
+  const firstSun = (mon) => {
+    const d1 = new Date(Date.UTC(y, mon, 1)).getUTCDay();
+    return 1 + ((7 - d1) % 7);
+  };
+  const dstStart = Date.UTC(y, 2, firstSun(2) + 7, 7);   // 3 月第二個週日 02:00 EST = 07:00 UTC
+  const dstEnd   = Date.UTC(y, 10, firstSun(10), 6);     // 11 月第一個週日 02:00 EDT = 06:00 UTC
+  return (ms >= dstStart && ms < dstEnd) ? -4 : -5;
+}
+
+/** 美股一般交易時段 09:30–16:00（美東）。不含美國假日。 */
+function usOpen(ms = Date.now()) {
+  const t = new Date(ms + usEastOffset(ms) * 3600e3);
+  const dow = t.getUTCDay();
+  if (dow === 0 || dow === 6) return false;
+  const m = t.getUTCHours() * 60 + t.getUTCMinutes();
+  return m >= 570 && m < 960;
 }
 
 /** 這筆報價落後多少分鐘。null 代表沒有時間戳可比。 */
@@ -850,7 +887,7 @@ function renderMarket() {
     const cls = dirClass(diff);
     const t = (q.time || (q.qts ? new Date(q.qts).toTimeString() : '')).slice(0, 5);
     const lm = staleMin(q.qts);
-    const lag = twOpen() && lm != null && lm >= 3;
+    const lag = twActive() && lm != null && lm >= 3;
     cells.push(`<div class="mk">
       <div class="k">${label}<span class="tag${lag ? ' lag' : ''}">${q.src === 'twse' ? '證交所' : 'Yahoo'} ${t}</span></div>
       <div class="v ${cls}">${nf2.format(q.price)}</div>
@@ -958,13 +995,21 @@ function cardHTML(r, isUS) {
   // 美股盤中是台灣時間 21:30–04:00。台灣白天打開時 Yahoo 回的是前一盤，
   // 這時候標「今日」會誤導，所以一律寫「較昨收」，並在收盤時掛一個標籤。
   const isTW = r.market !== 'us';
-  // 台股盤別由本地時鐘算，不用報價裡的（那是抓到時的狀態，會跟著舊報價卡住）
-  const closed = isTW ? !twOpen() : (r.state && r.state !== 'REGULAR');
+  // 兩邊的盤別都自己算，不依賴報價裡的 state ——
+  // 那是抓到那筆報價「當時」的狀態，會跟著舊報價一起卡住，
+  // 而 Yahoo 也不保證每次都給 marketState。
+  // 美股再加一層：時鐘說開著、但 Yahoo 明確說不是 REGULAR（例如美國假日）
+  // 就以 Yahoo 為準。
+  const phase = isTW
+    ? twPhase()
+    : ((usOpen() && (r.state ? r.state === 'REGULAR' : true)) ? 'open' : 'closed');
+  // 試撮價不是真實成交，標出來才不會被當成盤中價
+  const phaseTag = phase === 'pre' ? '試撮' : phase === 'closed' ? '收盤' : '';
   // 落後超過 3 分鐘就把報價時間染成琥珀色。不寫出分鐘數 ——
   // 時間本身就看得出來，13 張卡片各印一次反而是雜訊。
   // 收盤後報價不動是正常的，所以只在盤中判斷。
   const lagM = staleMin(r.qts);
-  const laggy = !closed && lagM != null && lagM >= 3;
+  const laggy = phase !== 'closed' && lagM != null && lagM >= 3;
   // 報價本身的時間。跟右上「已更新」的差距就是資料源延遲多久。
   const qt = r.qtime || (r.qts ? new Date(r.qts).toTimeString().slice(0, 8) : null);
   const cap = limitState(r);
@@ -976,7 +1021,7 @@ function cardHTML(r, isUS) {
       <span class="code">${r.code}</span>
       <span class="card-tags">
         ${cap ? `<span class="chip cap">${capTag}</span>` : ''}
-        ${closed ? '<span class="chip">收盤</span>' : ''}
+        ${phaseTag ? `<span class="chip">${phaseTag}</span>` : ''}
         <span class="chip">${srcLabel}</span>
       </span>
     </div>
@@ -1397,7 +1442,7 @@ async function refresh() {
     // 來源斷線時畫面會沿用舊報價，那樣看起來像在更新其實是凍結的。
     // 所以盤中改成報告最舊的那筆落後多久。
     let worstLag = null;
-    if (twOpen()) {
+    if (twActive()) {
       for (const r of d.rows.tw) {
         if (!r.ok) continue;
         const m = staleMin(r.qts);

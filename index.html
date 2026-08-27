@@ -514,7 +514,7 @@ const store = {
 const K = { hold:'pf.holdings', cfg:'pf.config', hist:'pf.history' };
 
 // 改版時記得改這個。頁尾會顯示，用來確認線上跑的是哪一版。
-const BUILD = 'v39';
+const BUILD = 'v40';
 
 let holdings = store.get(K.hold, []);
 /** 台灣習慣紅漲綠跌，其他地區反過來。存過設定的話以存的為準。 */
@@ -1450,11 +1450,12 @@ async function refresh() {
       }
     }
 
+    // 延遲的事實由狀態列和卡片上的報價時間表達，錯誤列只放來源回報的原因。
+    // 解釋性的長句每次刷新都出現一次，反而擠掉真正的訊息。
     if (worstLag != null && worstLag >= 3) {
       setStatus('warn', `報價延遲 ${worstLag} 分 · 抓取於 ${hhmmss}`);
-      showErr('報價停在較早的時間',
-        `來源沒有更新，畫面沿用最後一次成功抓到的價格（避免退回更舊的備援資料）。`
-        + (quotes.errors?.length ? '　' + quotes.errors.join('；') : ''));
+      if (quotes.errors?.length) showErr('有些代號沒回報價', quotes.errors.join('；'));
+      else showErr(null);
     } else if (quotes.errors?.length) {
       setStatus('warn', '部分沒抓到 · ' + hhmmss);
       showErr('有些代號沒回報價', quotes.errors.join('；'));

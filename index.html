@@ -1147,7 +1147,7 @@ function compactHistory(h) {
 
 /**
  * 總市值走勢。資料是每次成功更新時累積下來的，存在 localStorage。
- * 網頁沒開的時段不會有資料點，所以跨日的空隙用虛線連接、不假裝是連續的線。
+ * Worker 開盤每 5 分鐘、休市每小時記一點；超過 90 分鐘沒資料的空隙用虛線連接。
  */
 function renderTrend() {
   const plot = $('#trendPlot');
@@ -1176,10 +1176,11 @@ function renderTrend() {
   const cls = dirClass(change);
   const col = cls === 'up' ? 'var(--up-hi)' : cls === 'down' ? 'var(--down-hi)' : 'var(--dim)';
 
-  // 相鄰兩點超過 20 分鐘視為斷點（網頁關著），分段畫
+  // 相鄰兩點超過 90 分鐘才視為斷點。Worker 休市時每小時記一點，
+  // 用 20 分鐘當門檻會把每個休市小時都切成虛線空白。
   const segs = [[]];
   pts.forEach((p, i) => {
-    if (i && p.t - pts[i - 1].t > 20 * 60 * 1000) segs.push([]);
+    if (i && p.t - pts[i - 1].t > 90 * 60 * 1000) segs.push([]);
     segs[segs.length - 1].push(p);
   });
 

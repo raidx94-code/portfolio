@@ -841,6 +841,9 @@ function compute() {
 
   const all = [...rows.tw, ...rows.us].filter(r => r.ok);
   const value = all.reduce((s, r) => s + r.value, 0);
+  // 走勢圖只看台股：美股部位很小，混進來只會在台美交接、匯率變動時出現台階
+  const twAll = rows.tw.filter(r => r.ok);
+  const twValue = twAll.reduce((s, r) => s + r.value, 0);
   const cost = all.reduce((s, r) => s + r.cost, 0);
   const fees = all.reduce((s, r) => s + (r.fees || 0), 0);
   const pnl = value - cost - fees;
@@ -851,7 +854,7 @@ function compute() {
     if (!worst || r.pnl < worst.pnl) worst = r;
     if (!best || r.pnl > best.pnl) best = r;
   }
-  return { rows, value, cost, fees, pnl, retPct: cost ? pnl / cost * 100 : 0, fx, worst, best, all };
+  return { rows, value, cost, fees, pnl, retPct: cost ? pnl / cost * 100 : 0, fx, worst, best, all, twAll, twValue };
 }
 
 /* ---------- 畫面 ---------- */
@@ -1115,6 +1118,8 @@ function sparkHTML(r) {
 }
 
 /* ---------- 走勢 ---------- */
+const isTW = h => h.market !== 'us';
+
 function pushHistory(d) {
   // 雲端模式下走勢由 Cron 每 5 分鐘寫進 KV，瀏覽器不要重複記，
   // 否則兩份資料點會交錯，圖上出現鋸齒。
@@ -1125,16 +1130,16 @@ function pushHistory(d) {
   // 門檻：曾經有報價的持股這次要全部都在。
   // 暫時抓不到的由 mergeQuotes 沿用舊價，所以正常不會卡；
   // 真正被排除的只有停牌或代號錯誤這種從頭到尾沒資料的標的。
-  const expect = holdings.filter(h => everQuoted.has(h.code)).length;
-  if (!d || !Array.isArray(d.all) || !expect || d.all.length < expect) return;
+  const expect = holdings.filter(h => isTW(h) && everQuoted.has(h.code)).length;
+  if (!d || !Array.isArray(d.twAll) || !expect || d.twAll.length < expect) return;
 
-  const total = d.value;
+  const total = d.twValue;
   if (!Number.isFinite(total) || total <= 0) return;
   const now = Date.now();
   const last = hist[hist.length - 1];
   // 兩分鐘內算同一點，直接覆蓋，避免 15 秒更新時塞爆
-  if (last && now - last.t < 2 * 60 * 1000) { last.t = now; last.v = total; }
-  else hist.push({ t: now, v: total });
+  if (last && last.k === 'tw' && now - last.t < 2 * 60 * 1000) { last.t = now; last.v = total; }
+  else hist.push({ t: now, v: total, k: 'tw' });
   if (hist.length > 4000) hist = compactHistory(hist);
   store.set(K.hist, hist);
 }
@@ -1146,8 +1151,9 @@ function compactHistory(h) {
 }
 
 /**
- * 總市值走勢。資料是每次成功更新時累積下來的，存在 localStorage。
- * Worker 開盤每 5 分鐘、休市每小時記一點；超過 90 分鐘沒資料的空隙用虛線連接。
+ * 台股市值走勢。雲端模式由 Worker Cron 寫進 KV，本機模式存在 localStorage。
+ * X 軸依資料點順序等距排列，收盤、夜間、週末不佔寬度，線是連續的。
+ * 只畫帶 k:'tw' 的點；舊的台美合計點自動略過。
  */
 function renderTrend() {
   const plot = $('#trendPlot');
@@ -1155,7 +1161,7 @@ function renderTrend() {
 
   if (pts.length < 2) {
     plot.innerHTML = `<div class="trend-empty">
-      走勢要靠這個頁面開著才會累積。<br>目前只有 ${hist.length} 個資料點，再等幾分鐘就會出現。
+      台股市值走勢累積中。<br>目前只有 ${pts.length} 個資料點，開盤時每 5 分鐘一點，再等一下就會出現。
     </div>`;
     $('#trendRead').textContent = '—';
     $('#trendFrom').textContent = '';
@@ -1169,36 +1175,19 @@ function renderTrend() {
 
   const vs = pts.map(p => p.v);
   const [lo, hi, ticks] = niceScale(Math.min(...vs), Math.max(...vs));
-  const x = t => padL + (t - pts[0].t) / ((pts[pts.length - 1].t - pts[0].t) || 1) * (W - padL - padR);
+  const n = pts.length;
+  const x = i => padL + i / ((n - 1) || 1) * (W - padL - padR);
   const y = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
 
   const change = vs[vs.length - 1] - vs[0];
   const cls = dirClass(change);
   const col = cls === 'up' ? 'var(--up-hi)' : cls === 'down' ? 'var(--down-hi)' : 'var(--dim)';
 
-  // 相鄰兩點超過 90 分鐘才視為斷點。Worker 休市時每小時記一點，
-  // 用 20 分鐘當門檻會把每個休市小時都切成虛線空白。
-  const segs = [[]];
-  pts.forEach((p, i) => {
-    if (i && p.t - pts[i - 1].t > 90 * 60 * 1000) segs.push([]);
-    segs[segs.length - 1].push(p);
-  });
-
-  let paths = '', gaps = '', area = '';
-  segs.forEach((seg, i) => {
-    if (seg.length < 2) return;
-    const d = seg.map(p => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
-    paths += `<polyline points="${d}" fill="none" stroke="${col}" stroke-width="1.6"
-      stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
-    area += `<polygon points="${x(seg[0].t).toFixed(1)},${(H - padB).toFixed(1)} ${d} ${x(seg[seg.length - 1].t).toFixed(1)},${(H - padB).toFixed(1)}"
-      fill="url(#tgrad)" stroke="none"/>`;
-    const prev = segs[i - 1];
-    if (prev && prev.length) {
-      const a = prev[prev.length - 1], b = seg[0];
-      gaps += `<line x1="${x(a.t).toFixed(1)}" y1="${y(a.v).toFixed(1)}" x2="${x(b.t).toFixed(1)}" y2="${y(b.v).toFixed(1)}"
-        stroke="${col}" stroke-width="1" stroke-dasharray="2 4" opacity=".4" vector-effect="non-scaling-stroke"/>`;
-    }
-  });
+  const d = pts.map((p, i) => `${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+  const paths = `<polyline points="${d}" fill="none" stroke="${col}" stroke-width="1.6"
+    stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+  const area = `<polygon points="${x(0).toFixed(1)},${(H - padB).toFixed(1)} ${d} ${x(n - 1).toFixed(1)},${(H - padB).toFixed(1)}"
+    fill="url(#tgrad)" stroke="none"/>`;
 
   const wan = wanFmt(ticks.length > 1 ? ticks[1] - ticks[0] : hi - lo);
   const grid = ticks.map(v => `
@@ -1207,9 +1196,9 @@ function renderTrend() {
 
   const nx = 4;
   const xlabs = Array.from({ length: nx }, (_, i) => {
-    const t = pts[0].t + (pts[pts.length - 1].t - pts[0].t) * (i / (nx - 1));
+    const k = Math.round((n - 1) * (i / (nx - 1)));
     const anchor = i === 0 ? 'start' : i === nx - 1 ? 'end' : 'middle';
-    return `<text class="xlab" x="${x(t).toFixed(1)}" y="${H - 6}" text-anchor="${anchor}">${fmtTime(t)}</text>`;
+    return `<text class="xlab" x="${x(k).toFixed(1)}" y="${H - 6}" text-anchor="${anchor}">${fmtTime(pts[k].t)}</text>`;
   }).join('');
 
   plot.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
@@ -1217,7 +1206,7 @@ function renderTrend() {
       <stop offset="0%" stop-color="${col}" stop-opacity=".22"/>
       <stop offset="100%" stop-color="${col}" stop-opacity="0"/>
     </linearGradient></defs>
-    ${grid}${area}${gaps}${paths}${xlabs}
+    ${grid}${area}${paths}${xlabs}
     <g id="tcursor" style="display:none">
       <line class="cursor" y1="${padT}" y2="${H - padB}"/>
       <circle r="3" fill="${col}"/>
@@ -1227,17 +1216,17 @@ function renderTrend() {
   // 走勢是另一套資料（雲端模式下由 Cron 寫入）。跟現算市值差太多就講出來，
   // 否則你只會看到一道莫名的斷崖，還以為是股價崩了。
   // quotes 還沒回來時 lastD 是空的，這時不要下任何結論
-  const curValue = (lastD && lastD.all.length) ? lastD.value : null;
+  const curValue = (lastD && lastD.twAll.length) ? lastD.twValue : null;
   const lastPt = pts[pts.length - 1];
   const gap = (curValue && lastPt.v) ? lastPt.v - curValue : null;
   const warn = (gap != null && Math.abs(gap) / curValue > 0.05)
-    ? `⚠ 最後記錄點與目前市值差 ${sgnNT(gap)}，該時點可能有持股沒抓到報價`
+    ? `⚠ 最後記錄點與目前台股市值差 ${sgnNT(gap)}，該時點可能有持股沒抓到報價`
     : '';
 
-  const excluded = (lastD && lastD.all.length) ? holdings.length - lastD.all.length : 0;
+  const excluded = (lastD && lastD.twAll.length) ? holdings.filter(isTW).length - lastD.twAll.length : 0;
   const notes = [];
   if (dropped) notes.push(`已跳過 ${dropped} 個異常點（僅影響繪圖，原始資料保留）`);
-  if (excluded > 0) notes.push(`${excluded} 檔無報價未計入總市值`);
+  if (excluded > 0) notes.push(`${excluded} 檔台股無報價未計入`);
   if (warn) notes.push(warn);
 
   $('#trendFrom').textContent = fmtTime(pts[0].t);
@@ -1291,16 +1280,17 @@ function despike(pts) {
 
 function historyInRange() {
   const now = Date.now();
-  if (cfg.range === 'a') return hist.slice();
-  if (cfg.range === 'w') return hist.filter(p => now - p.t <= 7 * 864e5);
+  const tw = hist.filter(p => p.k === 'tw');
+  if (cfg.range === 'a') return tw;
+  if (cfg.range === 'w') return tw.filter(p => now - p.t <= 7 * 864e5);
   const d0 = new Date(); d0.setHours(0, 0, 0, 0);
-  return hist.filter(p => p.t >= d0.getTime());
+  return tw.filter(p => p.t >= d0.getTime());
 }
 
 function showRead(p, first) {
   const diff = p.v - first.v;
   $('#trendRead').innerHTML =
-    `總市值 <b>NT$${twd(p.v)}</b>　區間變化 <b class="${dirClass(diff)}">${sgnNT(diff)}` +
+    `台股市值 <b>NT$${twd(p.v)}</b>　區間變化 <b class="${dirClass(diff)}">${sgnNT(diff)}` +
     `（${first.v ? pct(diff / first.v * 100) : '—'}）</b>　${fmtTime(p.t)}`;
 }
 
@@ -1315,11 +1305,12 @@ function bindCursor(plot, pts, x, y) {
     const box = svg.getBoundingClientRect();
     const px = (ev.touches ? ev.touches[0].clientX : ev.clientX) - box.left;
     const sx = px * (svg.viewBox.baseVal.width / box.width);
-    let best = pts[0], bd = Infinity;
-    for (const p of pts) { const d = Math.abs(x(p.t) - sx); if (d < bd) { bd = d; best = p; } }
+    let bi = 0, bd = Infinity;
+    pts.forEach((p, i) => { const d = Math.abs(x(i) - sx); if (d < bd) { bd = d; bi = i; } });
+    const best = pts[bi];
     g.style.display = '';
-    line.setAttribute('x1', x(best.t)); line.setAttribute('x2', x(best.t));
-    dot.setAttribute('cx', x(best.t)); dot.setAttribute('cy', y(best.v));
+    line.setAttribute('x1', x(bi)); line.setAttribute('x2', x(bi));
+    dot.setAttribute('cx', x(bi)); dot.setAttribute('cy', y(best.v));
     showRead(best, first);
   };
   const leave = () => { g.style.display = 'none'; showRead(last, first); };
